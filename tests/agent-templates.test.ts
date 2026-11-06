@@ -1,0 +1,247 @@
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { JUDGE_SCHEMA_VERSION, validateRecord } from "../src/judge-enforcement.js";
+import { defaultPolicy } from "../src/templates/defaults.js";
+import { claudeImplementerFile, codexImplementerFile, copilotImplementerFile } from "../src/templates/implementer.js";
+import { codexSkills, mainInstructionTemplate } from "../src/templates/instructions.js";
+import { judgeContractFiles } from "../src/templates/judge-contract.js";
+import { claudeJudgeFile, codexJudgeFile, copilotJudgeFile, judgeExampleRecord } from "../src/templates/judge.js";
+import { taskTemplateFiles, wikiTemplates } from "../src/templates/wiki.js";
+
+const LOCAL_IMPL_LOG = ".wep/local/impl/TASK-XXX/log.md";
+// Any capsule path that ends in log.md, with or without a slug.
+const CAPSULE_LOG = /\.wep\/tasks\/TASK-XXX[^\s`'"]*\/log\.md/;
+
+const REVIEW_SCHEMA_PATH = ".wep/judge/schemas/review.schema.json";
+
+const judgeRenderers = {
+  claude: claudeJudgeFile,
+  copilot: copilotJudgeFile,
+  codex: codexJudgeFile,
+} as const;
+
+const implementerRenderers = {
+  claude: claudeImplementerFile,
+  copilot: copilotImplementerFile,
+  codex: codexImplementerFile,
+} as const;
+
+function onlyContent(record: Record<string, string>): string {
+  const values = Object.values(record);
+  expect(values).toHaveLength(1);
+  const [content = ""] = values;
+  return content;
+}
+
+describe("agent template renderings", () => {
+  describe("review boundary", () => {
+    it("ships a checklist that is ready before snapshot capture", () => {
+      const checklist = taskTemplateFiles["tasks/_template/review-checklist.md"] ?? "";
+
+      expect(checklist).toContain("ready for independent review");
+      expect(checklist).not.toContain("Independent review is completed");
+      expect(checklist).not.toContain("independent review completed");
+    });
+
+    it.each(["codex", "claude", "copilot"] as const)(
+      "%s rendering makes the pre-snapshot boundary and post-judge write prohibition explicit",
+      (target) => {
+        const content = mainInstructionTemplate(target);
+
+        expect(content).toContain("Complete the checklist and all capsule changes before snapshot capture");
+        expect(content).toContain("Do not edit the task capsule or checklist after the judge snapshot");
+        expect(content).toContain("verified APPROVED record and judge current reports CURRENT");
+        expect(content).toMatch(/substantive changes still require catch-up review/i);
+      },
+    );
+  });
+
+  describe("root instructions", () => {
+    it.each(["codex", "claude", "copilot"] as const)("%s rendering describes implementer delegation", (target) => {
+      const content = mainInstructionTemplate(target);
+      expect(content).toContain("wep-implementer");
+      expect(content).toContain("wep impl status TASK-XXX --json");
+      expect(content).toContain("on-request");
+      expect(content).toContain("post-clarification");
+      expect(content).toContain("explicit human confirmation");
+      expect(content).toContain("Never delegate automatically");
+      expect(content).toContain("wep impl start TASK-XXX");
+      expect(content).toContain("wep impl status TASK-XXX");
+      expect(content).toContain("owner of the capsule, validation, and handoff to `wep-judge`");
+    });
+  });
+
+  describe("implementer TDD evidence", () => {
+    it.each(Object.entries(implementerRenderers))(
+      "%s requires explicit ordered red-to-green evidence",
+      (_target, renderer) => {
+        const content = onlyContent(renderer());
+        expect(content).toContain('phase: "red"');
+        expect(content).toContain('phase: "green"');
+        expect(content).toContain("expectedFailure");
+        expect(content).toContain("red→green");
+      },
+    );
+  });
+
+  describe("judge", () => {
+    it.each(["codex", "claude", "copilot"] as const)(
+      "%s gives execution to the caller and the receipt to the judge",
+      (target) => {
+        const content = mainInstructionTemplate(target);
+        expect(content).not.toContain("read-only judge and comprehension agents cannot");
+        expect(content).toContain("The judge executes no validation; it reads the receipt");
+        expect(content).toContain("Pin the digest from your own observation of judge run");
+      },
+    );
+
+    it("workflow describes verifier dependencies from the lockfile", () => {
+      const workflow = codexSkills[".agents/skills/wep-workflow/SKILL.md"] ?? "";
+      expect(workflow).toContain("dependencies materialised from the lockfile");
+      expect(workflow).not.toContain("including the snapshot's private local Node dependencies");
+    });
+
+    it.each(Object.entries(judgeRenderers))(
+      "%s rendering keeps validation away from the canonical snapshot",
+      (_target, renderer) => {
+        const content = onlyContent(renderer());
+        expect(content).toContain("canonical snapshot");
+        expect(content).toContain("Never run validation, build, test, lint, or package-manager commands, anywhere");
+        expect(content).toContain("Execute no validation command yourself");
+      },
+    );
+
+    it.each(Object.entries(judgeRenderers))(
+      "%s rendering carries the review-policy instruction",
+      (_target, renderer) => {
+        const content = onlyContent(renderer());
+        expect(content).toContain(".wep/review-policy.md");
+        expect(content).toContain("additional review criteria");
+        expect(content).toContain("capsule wins");
+      },
+    );
+
+    it.each(Object.entries(judgeRenderers))(
+      "%s rendering contains no raw backtick in the TOML block",
+      (_target, renderer) => {
+        const content = onlyContent(renderer());
+        if (_target === "codex") {
+          expect(content).not.toMatch(/developer_instructions = """[\s\S]*`[\s\S]*"""/);
+        }
+      },
+    );
+
+    it("embedded example record validates against the same validator judge verify uses", () => {
+      const example = JSON.parse(judgeExampleRecord);
+      expect(validateRecord(example)).toEqual([]);
+      expect(example.schemaVersion).toBe(JUDGE_SCHEMA_VERSION);
+      expect(example.scope.schemaVersion).toBe(JUDGE_SCHEMA_VERSION);
+      const testEntry = example.tests[0];
+      expect(Object.keys(testEntry).sort()).toEqual(["command", "evidence", "status"]);
+    });
+
+    it("judge contract describes no generated-artifact exception in snapshot integrity", () => {
+      expect(judgeContractFiles[".wep/judge/README.md"]).not.toMatch(/generated artifacts?/i);
+    });
+
+    it("shipped schema accepts the optional independent field the judge is told to emit", () => {
+      const schema = JSON.parse(judgeContractFiles[REVIEW_SCHEMA_PATH] ?? "{}");
+      expect(schema.properties.independent).toEqual({
+        type: "boolean",
+        description: expect.stringContaining("Absent means true"),
+      });
+      expect(schema.required).not.toContain("independent");
+
+      const example = JSON.parse(judgeExampleRecord);
+      expect(validateRecord({ ...example, independent: false })).toEqual([]);
+      expect(validateRecord({ ...example, independent: true })).toEqual([]);
+    });
+
+    it("evidence belongs to a tests entry and is rejected at the top level", () => {
+      const schema = JSON.parse(judgeContractFiles[REVIEW_SCHEMA_PATH] ?? "{}");
+      expect(schema.additionalProperties).toBe(false);
+      expect(schema.properties.evidence).toBeUndefined();
+      expect(schema.properties.tests.items.properties.evidence).toEqual({ type: "string" });
+
+      const example = JSON.parse(judgeExampleRecord);
+      expect(validateRecord({ ...example, evidence: "summary" })).not.toEqual([]);
+    });
+
+    it.each(Object.entries(judgeRenderers))(
+      "%s rendering enumerates the accepted top-level keys",
+      (_target, renderer) => {
+        const content = onlyContent(renderer());
+        expect(content).toContain("The top level accepts exactly these keys and no others");
+        expect(content).toContain("entry and never at the top level");
+      },
+    );
+
+    it.each(Object.entries(judgeRenderers))(
+      "%s rendering carries the embedded example record verbatim",
+      (_target, renderer) => {
+        const content = onlyContent(renderer());
+        expect(content).toContain(judgeExampleRecord);
+        expect(content).not.toContain('"notes"');
+        expect(content).toContain('"evidence"');
+        expect(content).toContain('"independent": false');
+      },
+    );
+  });
+
+  describe("implementation log placement", () => {
+    it.each(["codex", "claude", "copilot"] as const)(
+      "%s rendering writes implementation notes to local storage",
+      (target) => {
+        const content = mainInstructionTemplate(target);
+        expect(content).toContain(`- Task implementation notes: ${LOCAL_IMPL_LOG}`);
+        expect(content).not.toMatch(CAPSULE_LOG);
+      },
+    );
+
+    it("wiki write policy names the local log", () => {
+      const page = wikiTemplates["wiki/write-policy.md"] ?? "";
+      expect(page).toContain(`- Implementation notes for a task: ${LOCAL_IMPL_LOG}`);
+      expect(page).not.toMatch(CAPSULE_LOG);
+    });
+
+    it.each(["default", "strict", "regulated"] as const)("%s policy names the local log", (profile) => {
+      expect(defaultPolicy(profile).writePolicy.implementationNotes).toEqual([LOCAL_IMPL_LOG]);
+    });
+
+    it.each(Object.entries(implementerRenderers))("%s reads the log the write policy names", (_target, renderer) => {
+      expect(onlyContent(renderer())).toContain(LOCAL_IMPL_LOG);
+    });
+
+    it("no source template places a log inside a capsule", async () => {
+      const dir = path.join(import.meta.dirname, "../src/templates");
+      const offenders: string[] = [];
+      for (const name of await readdir(dir)) {
+        if (CAPSULE_LOG.test(await readFile(path.join(dir, name), "utf8"))) offenders.push(name);
+      }
+      expect(offenders).toEqual([]);
+    });
+  });
+
+  describe("implementer", () => {
+    it.each(Object.entries(implementerRenderers))(
+      "%s rendering carries the review-policy instruction",
+      (_target, renderer) => {
+        const content = onlyContent(renderer());
+        expect(content).toContain(".wep/review-policy.md");
+        expect(content).toContain("Build against its entries");
+        expect(content).toContain("capsule wins");
+      },
+    );
+
+    it.each(Object.entries(implementerRenderers))(
+      "%s rendering contains no raw backtick in the TOML block",
+      (_target, renderer) => {
+        const content = onlyContent(renderer());
+        if (_target === "codex") {
+          expect(content).not.toMatch(/developer_instructions = """[\s\S]*`[\s\S]*"""/);
+        }
+      },
+    );
+  });
+});

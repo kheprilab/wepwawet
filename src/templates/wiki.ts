@@ -1,0 +1,266 @@
+import { type CapsuleContent, capsuleFiles } from "../harness-files.js";
+import type { DoctorResult, Suggestion, WikiLintResult } from "../types.js";
+
+export function wikiFrontmatter(
+  type: string,
+  title: string,
+  description: string,
+  tags: string[] = [],
+  timestamp: string = new Date().toISOString(),
+): string {
+  const tagList = tags.map((tag) => JSON.stringify(tag)).join(", ");
+  return `---\ntype: ${type}\ntitle: ${JSON.stringify(title)}\ndescription: ${JSON.stringify(description)}\ntags: [${tagList}]\ntimestamp: ${timestamp}\n---\n\n`;
+}
+
+export function overviewTemplate(projectName: string, targets: string[], installedVersion: string): string {
+  return `${wikiFrontmatter("wep-wiki-overview", "Overview", `Project overview for ${projectName}.`, ["overview", "wep"])}# Overview
+
+**Project:** ${projectName}
+**wep version:** ${installedVersion}
+**Installed targets:** ${targets.join(", ")}
+
+This repository uses wep as an agentic workflow harness. The \`.wep/\` directory is the neutral source of truth.
+
+## Quick Reference
+
+- Workflows: fast-patch, research-first, SDD, TDD, EDD, SDD+TDD, SDD+EDD, TDD+EDD, UI review
+- Default workflow: read from \`.wep/config.json\` → \`defaults.workflow\`
+- Task capsules: \`.wep/tasks/TASK-XXX/\`
+- Wiki: \`.wep/wiki/\` (populated by \`wep doctor\`)
+
+## Next Steps
+
+Ask your agent: "Run wep doctor." It will audit this setup and populate the wiki.
+`;
+}
+
+export function agentSetupTemplate(result: DoctorResult): string {
+  return `${wikiFrontmatter("wep-wiki-agent-setup", "Agent Setup", "Readiness report for the wep harness.", ["agent-setup", "doctor"])}# Agent Setup
+
+Agent readiness: ${result.readiness}/100
+
+## Detected Targets
+
+${result.detectedTargets.length ? result.detectedTargets.map((target) => `- ${target}`).join("\n") : "- None"}
+
+## Installed Targets
+
+${result.installedTargets.length ? result.installedTargets.map((target) => `- ${target}`).join("\n") : "- None"}
+
+## Missing Files
+
+${result.missing.length ? result.missing.map((file) => `- ${file}`).join("\n") : "- None"}
+
+## Human-Approved Merge Needed
+
+${result.conflicts.length ? result.conflicts.map((conflict) => `- ${conflict}`).join("\n") : "- None"}
+
+## Suggested Safe Next Steps
+
+${result.suggestions.map((suggestion) => `- [${suggestion.severity}] ${suggestion.text}`).join("\n")}
+`;
+}
+
+export interface GapSection {
+  heading: string;
+  items: string[];
+}
+
+export function gapsTemplate(sections: GapSection[], wikiLint?: WikiLintResult): string {
+  let body = "";
+  for (const section of sections) {
+    if (section.items.length === 0) continue;
+    body += `## ${section.heading}\n\n${section.items.map((item) => `- ${item}`).join("\n")}\n\n`;
+  }
+  if (wikiLint?.brokenLinks.length) {
+    body += `## Wiki lint: broken links\n\n${wikiLint.brokenLinks.map((issue) => `- ${issue.file}: ${issue.message}`).join("\n")}\n\n`;
+  }
+  if (wikiLint?.missingTimestamps.length) {
+    body += `## Wiki lint: missing timestamps\n\n${wikiLint.missingTimestamps.map((issue) => `- ${issue.file}: ${issue.message}`).join("\n")}\n\n`;
+  }
+  if (!body) body = "- No gaps detected.\n";
+  return `${wikiFrontmatter("wep-wiki-gaps", "Gaps", "Identified gaps in the wep harness.", ["gaps", "doctor"])}# Gaps
+
+${body}`;
+}
+
+export function recommendationsTemplate(recommendations: Suggestion[]): string {
+  const body = recommendations.length
+    ? recommendations.map((recommendation) => `- [${recommendation.severity}] ${recommendation.text}`).join("\n")
+    : "- No actionable recommendations.";
+  return `${wikiFrontmatter("wep-wiki-recommendations", "Recommendations", "Suggested next steps for the wep harness.", ["recommendations", "doctor"])}# Recommendations
+
+${body}
+`;
+}
+
+export const wikiTemplates: Record<string, string> = {
+  "wiki/architecture.md": `${wikiFrontmatter("wep-wiki-architecture", "Architecture", "Project architecture discovered by the agent.", ["architecture"])}# Architecture
+
+Document the project architecture here as the agent learns it.
+
+When you discover a significant pattern, dependency, or boundary, add it to this page. Keep it concise and cross-link to relevant files or decisions.
+`,
+
+  "wiki/conventions.md": `${wikiFrontmatter("wep-wiki-conventions", "Conventions", "Coding, naming, and review conventions discovered by the agent.", ["conventions"])}# Conventions
+
+Document coding, naming, and review conventions here.
+
+When you identify a convention the project follows, add it with a short example. Do not invent conventions that are not evidenced in the codebase.
+`,
+
+  "wiki/testing.md": `${wikiFrontmatter("wep-wiki-testing", "Testing", "Build, test, lint, and validation commands for the project.", ["testing"])}# Testing
+
+Document build, test, lint, and validation commands here.
+
+When you verify a command works, record it here with its purpose. Prefer commands from package.json scripts when they exist.
+`,
+
+  "wiki/workflows.md": `${wikiFrontmatter("wep-wiki-workflows", "Workflows", "Supported wep workflows and selection policy.", ["workflows", "wep"])}# Workflows
+
+Use wep task capsules before implementation.
+
+## Project Default
+
+The project default lives in .wep/config.json:
+
+- defaults.workflow: task-fit means choose the smallest workflow that fits the task.
+- defaults.requireWorkflowReason: true means each task capsule should explain why the workflow was chosen.
+- defaults.contextBudget: proportional means load only context that is useful for the current task.
+
+## Supported Labels
+
+- fast-patch
+- research-first
+- SDD
+- TDD
+- EDD
+- SDD+TDD
+- SDD+EDD
+- TDD+EDD
+- UI review (auto-assigned for UI tasks, not a user-selectable default)
+
+## Selection Policy
+
+- Use fast-patch for small, low-risk changes.
+- Use TDD for bugs, regressions, and testable logic changes.
+- Use SDD for APIs, contracts, schemas, permissions, and behavior specifications.
+- Use SDD+TDD for new or changed contracts that need executable tests.
+- Use EDD for examples, edge cases, and ambiguous rules.
+- Use SDD+EDD for domains with many examples or boundary cases.
+- Use research-first when the relevant area is unknown.
+- Use UI review for UI validation tasks (discovers stylelint, storybook, playwright, etc.).
+`,
+
+  "wiki/decisions.md": `${wikiFrontmatter("wep-wiki-decisions", "Decisions", "Important project and agent-workflow decisions.", ["decisions"])}# Decisions
+
+Record important project and agent-workflow decisions here.
+
+Include the date, the decision, the context, and the consequences. Link to relevant issues, PRs, or wiki pages when possible.
+`,
+
+  "wiki/agent-setup.md": `${wikiFrontmatter("wep-wiki-agent-setup", "Agent Setup", "Readiness report for the wep harness.", ["agent-setup", "doctor"])}# Agent Setup
+
+wep preserves existing agent instructions and writes suggested files when conflicts exist.
+`,
+
+  // biome-ignore format: preserve markdown in template literal
+  "wiki/write-policy.md": `${wikiFrontmatter("wep-wiki-write-policy", "Write Policy", "Where wep and agents should persist durable context.", ["write-policy", "wep"])}# Write Policy
+
+wep keeps root instructions small and writes durable context only when it has a clear home.
+
+## Where To Write
+
+- Wiki index: .wep/wiki/index.md
+- Mechanical Doctor reports: .wep/wiki/agent-setup.md, gaps.md, recommendations.md
+- Persistent agent instruction audit: .wep/wiki/instruction-audit.md
+- Project knowledge maintained by Doctor: .wep/wiki/architecture.md, conventions.md, testing.md, decisions.md
+- Doctor merge candidates: AGENTS.wep.suggested.md, CLAUDE.wep.suggested.md, .github/copilot-instructions.wep.suggested.md
+- Task capsules: .wep/tasks/TASK-XXX/
+- Compiled briefs: .wep/tasks/TASK-XXX/exports/<target>.md
+- Architecture or process decisions: .wep/wiki/decisions.md
+- Implementation notes for a task: .wep/local/impl/TASK-XXX/log.md (local only; never inside the capsule)
+
+## Cross-Links
+
+Use bundle-relative links (\`/wiki/decisions.md\`) when linking between wiki pages. They remain valid if a page is moved between directories.
+
+## Context Budget
+
+- Do not read all of .wep/ by default.
+- Read policy.json first when safety or merge behavior matters.
+- Read the current task capsule before implementation.
+- Read only wiki pages that are relevant to the current task.
+- Load target workflow skills or prompts only when the task calls for them.
+
+## Protected Instruction Merges
+
+- Protected instructions are read-only by default.
+- The Doctor agent must show the exact minimal diff before asking for approval.
+- Only explicit approval of that diff in the current conversation permits the agent to edit the protected file.
+- A changed proposal or target requires a new preview and approval.
+- After applying the approved diff, show the result, rerun Doctor, and remove the matching suggested file only when the merge is verified.
+`,
+
+  "wiki/log.md": `${wikiFrontmatter("wep-wiki-log", "Log", "Chronological history of wep events.", ["log"])}# Log
+
+## ${new Date().toISOString().slice(0, 10)}
+- wep initialized.
+`,
+
+  "wiki/gaps.md": `${wikiFrontmatter("wep-wiki-gaps", "Gaps", "Identified gaps in the wep harness.", ["gaps", "doctor"])}# Gaps
+
+- No gaps detected.
+`,
+
+  "wiki/recommendations.md": `${wikiFrontmatter("wep-wiki-recommendations", "Recommendations", "Suggested next steps for the wep harness.", ["recommendations", "doctor"])}# Recommendations
+
+- No actionable recommendations.
+`,
+
+  "wiki/instruction-audit.md": `${wikiFrontmatter("wep-wiki-instruction-audit", "Instruction Audit", "Persistent semantic audit of agent instruction placement.", ["instructions", "doctor", "audit"])}# Instruction Audit
+
+The Doctor agent records semantic instruction findings here. Unlike the CLI-generated readiness reports, \`wep doctor\` does not overwrite this page.
+
+For each instruction or coherent block, record its current tier, verdict (keep, move, delete, or verify), evidence, and proposed destination when applicable.
+`,
+
+  "wiki/index.md": `${wikiFrontmatter("wep-wiki-index", "Wiki Index", "Directory of wep wiki pages.", ["index", "wep"])}# Wiki Index
+
+- [Overview](/wiki/overview.md) — Project overview and quick reference.
+- [Architecture](/wiki/architecture.md) — Project architecture.
+- [Conventions](/wiki/conventions.md) — Coding and review conventions.
+- [Testing](/wiki/testing.md) — Build, test, lint, and validation commands.
+- [Workflows](/wiki/workflows.md) — Supported workflows and selection policy.
+- [Decisions](/wiki/decisions.md) — Project and agent-workflow decisions.
+- [Agent Setup](/wiki/agent-setup.md) — Doctor readiness report.
+- [Gaps](/wiki/gaps.md) — Identified harness gaps.
+- [Recommendations](/wiki/recommendations.md) — Suggested next steps.
+- [Instruction Audit](/wiki/instruction-audit.md) — Persistent semantic review of instruction placement.
+- [Write Policy](/wiki/write-policy.md) — Where to persist durable context.
+- [Log](/wiki/log.md) — Chronological history.
+`,
+};
+
+/**
+ * Typed by CapsuleContent so a new entry in `capsuleFiles` fails to compile until the
+ * shipped template ships it too. `taskTemplateFiles` is then derived rather than written
+ * out, which is what keeps `_template` from falling behind what Doctor and the judge
+ * require of a capsule.
+ */
+const capsuleTemplates: CapsuleContent = {
+  "task.md":
+    "# Task\n\n## Goal\n\nDescribe the requested change.\n\n## Validation\n\nCommands that prove this task works. Every command is required unless its line ends\nwith `# optional`. The judge must run every required command to approve, and\n`wep judge verify --run-tests` re-runs the ones the review claims passed. Nothing\noutside this list is ever executed.\n\n```\n```\n\n## Out Of Scope\n\n- Work outside this task capsule's agreed scope.\n\n## Clarifications\n\nAmbiguity resolved with the human before implementation. Ask only when two plausible\nanswers would produce different code, validation, or scope. Group answers under a\n`### Session YYYY-MM-DD` heading, and propagate any that changes a criterion into\nacceptance-criteria.md. One answer per top-level `- ` bullet; only those are read.\n\n- None recorded yet.\n\n## Open Questions\n\nAmbiguity still unresolved. Nothing here blocks mechanically, but the judge reads it:\nan approval granted while one of these would have changed the implementation is an\napproval against a goal nobody agreed on. Record the question; never assume the answer.\nOne question per top-level `- ` bullet; only those are read.\n\n- None recorded yet.\n",
+  "context.md":
+    "# Context\n\n## Relevant Files\n\n- To be filled by the agent.\n\n## Blocked Reads\n\n- Secrets and credentials must not be read.\n",
+  "plan.md":
+    "# Plan\n\n## Workflow\n\n- research-first\n\n## Steps\n\n1. Inspect relevant context.\n2. Confirm scope.\n3. Implement only after context is ready.\n",
+  "acceptance-criteria.md":
+    "# Acceptance Criteria\n\nEvery criterion is one top-level `- ` bullet that starts with `AC-<n>: `. The judge reports a\ntyped result per identifier, so identifiers must be unique and must never be reused for a\ndifferent criterion. Indented lines continue the bullet above them.\n\nA criterion can declare the evidence it expects on indented lines under its bullet. Write `proof-command: <command>` to name a command from `## Validation` in task.md. Write `proof-doc: <path>[#Heading]` to point the judge at a repository file. Both are optional, with one reference per line. Add no proof to a criterion that needs judgment.\n\n- AC-1: State each criterion so it can be checked, not interpreted.\n- AC-2: Existing agent instruction files are preserved unless a human approves a merge.\n- AC-3: Relevant validation commands are documented or run.\n- AC-4: The review checklist is completed before handoff.\n",
+  "review-checklist.md":
+    "# Review Checklist\n\n## Evidence References\n\nPoint to evidence. Do not restate results or tick boxes here.\n\n- Acceptance criteria: cite the AC identifiers, for example AC-1.\n- Validation: cite the commands declared in task.md and their recorded evidence.\n\n## Process Attestations\n\nA checked box is self-reported by the named actor. It is not independent verification or\nauthenticated human approval. Complete every box before snapshot capture.\n\n- [ ] Implementing agent: relevant files were inspected and blocked paths were avoided.\n- [ ] Implementing agent: existing instruction files were not overwritten.\n- [ ] Implementing agent: all capsule changes are final before snapshot capture.\n- [ ] Implementing agent: the capsule is ready for independent review.\n",
+};
+
+export const taskTemplateFiles: Record<string, string> = Object.fromEntries(
+  capsuleFiles.map((file) => [`tasks/_template/${file}`, capsuleTemplates[file]]),
+);

@@ -1,0 +1,604 @@
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { agentFilePathList, agentWarningTexts, resolveAgents } from "./agents.js";
+import { isLocalIgnoreContentSafe, localIgnorePath } from "./comprehension.js";
+import { readConfigForDiagnosis, writeConfig } from "./config.js";
+import { detectTargets } from "./detect.js";
+import { listDirs, pathExists, writePlannedFile } from "./fs-utils.js";
+import {
+  expandModules,
+  hasModule,
+  protectedFiles,
+  requiredFiles,
+  targetFilesForModules,
+  upgradesIgnorePath,
+} from "./harness-files.js";
+import { implLogPath } from "./impl.js";
+import { runInit } from "./init.js";
+import {
+  agentSetupTemplate,
+  defaultConfig,
+  defaultPolicy,
+  gapsTemplate,
+  localComprehensionIgnoreTemplate,
+  recommendationsTemplate,
+  upgradesIgnoreTemplate,
+} from "./templates.js";
+import {
+  type AgentName,
+  type CapsuleLogFinding,
+  type CommandOptions,
+  type DoctorResult,
+  type ModuleName,
+  type Profile,
+  type Suggestion,
+  type Target,
+  type WepConfig,
+  type WikiLintResult,
+  moduleNames,
+  profiles,
+  targets,
+} from "./types.js";
+import { CLI_VERSION } from "./version.js";
+import { lintWiki } from "./wiki-lint.js";
+
+export async function runDoctor(options: CommandOptions): Promise<DoctorResult> {
+  const cwd = options.cwd ?? process.cwd();
+  const initial = await diagnose(cwd, options);
+
+  if (!options.fix || !initial.installed) {
+    return initial;
+  }
+
+  const fixed: string[] = [];
+  const diagnosisConfig = await readConfigForDiagnosis(cwd);
+  const activeModules = expandModules(diagnosisConfig?.modules);
+
+  if (initial.installedTargets.length > 0) {
+    const profile = await readProfile(cwd);
+    for (const target of initial.installedTargets) {
+      const initResult = await runInit({ ...options, target, profile, force: false, repair: true });
+      for (const write of initResult.writes) {
+        if (write.kind === "create" || write.kind === "update") fixed.push(write.path);
+      }
+    }
+  }
+
+  const configPath = path.join(cwd, ".wep/config.json");
+  if (await pathExists(configPath)) {
+    try {
+      const rawText = await readFile(configPath, "utf8");
+      const raw = JSON.parse(rawText);
+      const normalized = normalizeConfigForFix(raw);
+      const nextText = normalized ? `${JSON.stringify(normalized, null, 2)}\n` : rawText;
+      if (nextText !== rawText && normalized) {
+        await writeConfig(cwd, normalized, options.dryRun);
+        if (!options.dryRun) fixed.push(".wep/config.json");
+      }
+    } catch {
+      // Invalid JSON — leave untouched here; getConfigGaps surfaces the issue.
+    }
+  }
+
+  if (hasModule(activeModules, "judge")) {
+    const policyFixed = await fixPolicy(cwd, options.dryRun);
+    if (policyFixed) fixed.push(".wep/policy.json");
+  }
+
+  if (hasModule(activeModules, "tasks")) {
+    const localIgnoreFixed = await fixSelfIgnoringDirectory(
+      cwd,
+      localIgnorePath,
+      localComprehensionIgnoreTemplate,
+      "Protect personal comprehension records from version control.",
+      options.dryRun,
+    );
+    if (localIgnoreFixed && !options.dryRun) fixed.push(localIgnorePath);
+
+    const upgradesIgnoreFixed = await fixSelfIgnoringDirectory(
+      cwd,
+      upgradesIgnorePath,
+      upgradesIgnoreTemplate,
+      "Keep unaccepted upgrade candidates out of version control.",
+      options.dryRun,
+    );
+    if (upgradesIgnoreFixed && !options.dryRun) fixed.push(upgradesIgnorePath);
+  }
+
+  const final = await diagnose(cwd, options);
+  return { ...final, fixed: Array.from(new Set(fixed)) };
+}
+
+async function readProfile(cwd: string): Promise<Profile> {
+  const config = await readConfigForDiagnosis(cwd);
+  return config?.profile && profiles.includes(config.profile as Profile) ? (config.profile as Profile) : "default";
+}
+
+function normalizeConfigForFix(config: WepConfig): WepConfig | undefined {
+  const configuredTargets = Array.isArray(config.targets)
+    ? config.targets.filter((target): target is Target => targets.includes(target))
+    : [];
+  if (configuredTargets.length === 0) return undefined;
+  const base = defaultConfig(configuredTargets, config.profile);
+  return {
+    ...base,
+    ...config,
+    targets: configuredTargets,
+    sourceOfTruth: ".wep",
+    createdBy: "wep",
+    defaults: {
+      ...base.defaults,
+      ...config.defaults,
+      allowedWorkflows: config.defaults?.allowedWorkflows ?? base.defaults.allowedWorkflows,
+    },
+    workflowRules: {
+      ...base.workflowRules,
+      ...config.workflowRules,
+    },
+    comprehensionGate: {
+      enabled:
+        typeof config.comprehensionGate?.enabled === "boolean"
+          ? config.comprehensionGate.enabled
+          : base.comprehensionGate.enabled,
+      trigger:
+        typeof config.comprehensionGate?.trigger === "string" && config.comprehensionGate.trigger.trim()
+          ? config.comprehensionGate.trigger
+          : base.comprehensionGate.trigger,
+      evaluationMode:
+        config.comprehensionGate?.evaluationMode === "prefer-independent"
+          ? config.comprehensionGate.evaluationMode
+          : base.comprehensionGate.evaluationMode,
+    },
+  };
+}
+
+async function fixSelfIgnoringDirectory(
+  cwd: string,
+  relativePath: string,
+  content: string,
+  reason: string,
+  dryRun?: boolean,
+): Promise<boolean> {
+  const ignorePath = path.join(cwd, relativePath);
+  const current = await readFile(ignorePath, "utf8").catch(() => undefined);
+  if (isLocalIgnoreContentSafe(current)) return false;
+  await writePlannedFile(cwd, relativePath, content, { dryRun, force: true, reason });
+  return true;
+}
+
+async function fixPolicy(cwd: string, dryRun?: boolean): Promise<boolean> {
+  const policyPath = path.join(cwd, ".wep/policy.json");
+  if (!(await pathExists(policyPath))) return false;
+  try {
+    const raw = JSON.parse(await readFile(policyPath, "utf8"));
+    const profile = policyProfile(raw.profile);
+    const expected = defaultPolicy(profile);
+    const merged: Record<string, unknown> = { version: expected.version, profile };
+
+    for (const key of Object.keys(expected)) {
+      if (key === "profile") continue;
+      const expectedValue = expected[key as keyof typeof expected];
+      if (Array.isArray(expectedValue)) {
+        const existing = Array.isArray(raw[key]) ? raw[key] : [];
+        merged[key] = Array.from(new Set([...existing, ...expectedValue]));
+      } else if (typeof expectedValue === "object" && expectedValue !== null) {
+        merged[key] = { ...(expectedValue as object), ...(typeof raw[key] === "object" ? raw[key] : {}) };
+      } else {
+        merged[key] = raw[key] ?? expectedValue;
+      }
+    }
+
+    const nextText = `${JSON.stringify(merged, null, 2)}\n`;
+    if (nextText === `${JSON.stringify(raw, null, 2)}\n`) return false;
+
+    if (!dryRun) {
+      await writeFile(policyPath, nextText, "utf8");
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function diagnose(cwd: string, options: CommandOptions): Promise<DoctorResult> {
+  const detection = await detectTargets(cwd);
+  const config = await readConfigForDiagnosis(cwd);
+  const activeModules = expandModules(config?.modules);
+  const tasksInstalled = hasModule(activeModules, "tasks");
+  const judgeInstalled = hasModule(activeModules, "judge");
+
+  const installedTargets = await getInstalledTargets(cwd, config, activeModules);
+  const missing = await getMissing(cwd, requiredFiles(activeModules, installedTargets));
+  const { gaps: configGaps, installedVersion } = await getConfigGaps(cwd, activeModules);
+  const policyGaps = judgeInstalled ? await getPolicyGaps(cwd) : [];
+  const localPrivacyGaps = tasksInstalled ? await getLocalPrivacyGaps(cwd) : [];
+  const conflicts = await getInstructionConflicts(cwd);
+  const installed = await pathExists(path.join(cwd, ".wep/config.json"));
+  const agentGaps = await getAgentGaps(cwd, activeModules);
+  const agentConfigWarnings = await getAgentWarnings(cwd, activeModules);
+  const wikiLint =
+    installed && tasksInstalled ? await lintWiki(cwd) : { brokenLinks: [], orphans: [], missingTimestamps: [] };
+  const wikiLintIssueCount = wikiLint.brokenLinks.length + wikiLint.missingTimestamps.length;
+  const capsuleLogs = tasksInstalled ? await getCapsuleLogs(cwd) : [];
+  const configPolicyGaps = [...configGaps, ...policyGaps, ...localPrivacyGaps];
+  const allMissing = [...missing, ...configPolicyGaps];
+  const suggestions: Suggestion[] = [
+    ...buildSuggestions(installed, installedTargets, allMissing, conflicts, installedVersion, agentGaps),
+    ...agentConfigWarnings.map((text) => ({ text, severity: "warning" as const })),
+    ...(wikiLintIssueCount > 0
+      ? [
+          {
+            text: `Wiki lint found ${wikiLintIssueCount} issue(s) (broken links / missing timestamps). See .wep/wiki/gaps.md.`,
+            severity: "warning" as const,
+          },
+        ]
+      : []),
+    ...(wikiLint.orphans.length
+      ? [{ text: `Wiki orphan pages: ${wikiLint.orphans.join(", ")}`, severity: "info" as const }]
+      : []),
+    ...capsuleLogs.map(capsuleLogSuggestion),
+  ];
+  const readiness = scoreReadiness(
+    installed,
+    installedTargets,
+    missing,
+    configPolicyGaps,
+    wikiLintIssueCount,
+    conflicts,
+  );
+
+  const result: DoctorResult = {
+    installed,
+    readiness,
+    detectedTargets: detection.detected,
+    installedTargets,
+    missing: allMissing,
+    conflicts,
+    suggestions,
+    wikiLint,
+    capsuleLogs,
+  };
+
+  if (tasksInstalled) {
+    await writeDoctorWiki(cwd, result, { missing, configGaps, policyGaps, localPrivacyGaps }, wikiLint, options);
+  }
+  return result;
+}
+
+async function getCapsuleLogs(cwd: string): Promise<CapsuleLogFinding[]> {
+  const findings: CapsuleLogFinding[] = [];
+  for (const dir of await listDirs(path.join(cwd, ".wep/tasks"))) {
+    const taskId = /^TASK-\d+/.exec(dir)?.[0];
+    const relative = `.wep/tasks/${dir}/log.md`;
+    if (taskId && (await pathExists(path.join(cwd, relative)))) findings.push({ taskId, path: relative });
+  }
+  return findings;
+}
+
+function capsuleLogSuggestion(finding: CapsuleLogFinding): Suggestion {
+  return {
+    text: `${finding.taskId}: ${finding.path} is inside the reviewed boundary, so the judge reads the implementing agent's own account as evidence. The implementation log belongs at ${implLogPath(finding.taskId)}. Doctor does not move it; decide whether to move it yourself.`,
+    severity: "warning",
+  };
+}
+
+async function getPolicyGaps(cwd: string): Promise<string[]> {
+  const policyPath = path.join(cwd, ".wep/policy.json");
+  if (!(await pathExists(policyPath))) return [];
+
+  try {
+    const policy = JSON.parse(await readFile(policyPath, "utf8"));
+    const profile = policyProfile(policy.profile);
+    const expected = defaultPolicy(profile);
+    const gaps: string[] = [];
+
+    if (policy.profile !== undefined && profile !== policy.profile) {
+      gaps.push(".wep/policy.json — profile must be default, strict, or regulated");
+    }
+
+    if (policy.mergeStrategy !== expected.mergeStrategy) {
+      gaps.push(".wep/policy.json — mergeStrategy must be preserve-and-suggest");
+    }
+
+    if (policy.protectedFileMerge?.agentMayEdit !== expected.protectedFileMerge.agentMayEdit) {
+      gaps.push(".wep/policy.json — protectedFileMerge.agentMayEdit must require explicit human approval");
+    }
+    if (policy.protectedFileMerge?.approvalScope !== expected.protectedFileMerge.approvalScope) {
+      gaps.push(".wep/policy.json — protectedFileMerge.approvalScope must be current-conversation");
+    }
+    if (policy.protectedFileMerge?.requireDiffPreview !== true) {
+      gaps.push(".wep/policy.json — protectedFileMerge.requireDiffPreview must be true");
+    }
+
+    for (const file of expected.protectedFiles) {
+      if (!arrayIncludes(policy.protectedFiles, file)) {
+        gaps.push(`.wep/policy.json — protectedFiles missing ${file}`);
+      }
+    }
+
+    for (const pattern of expected.blockedReadPatterns) {
+      if (!arrayIncludes(policy.blockedReadPatterns, pattern)) {
+        gaps.push(`.wep/policy.json — blockedReadPatterns missing ${pattern}`);
+      }
+    }
+
+    if (policy.contextBudget?.rootInstructions !== expected.contextBudget.rootInstructions) {
+      gaps.push(".wep/policy.json — contextBudget.rootInstructions must be minimal");
+    }
+    if (policy.contextBudget?.loadWorkflowsOnDemand !== true) {
+      gaps.push(".wep/policy.json — contextBudget.loadWorkflowsOnDemand must be true");
+    }
+    if (policy.contextBudget?.doNotReadAllByDefault !== true) {
+      gaps.push(".wep/policy.json — contextBudget.doNotReadAllByDefault must be true");
+    }
+
+    for (const [key, value] of Object.entries(expected.enforcement)) {
+      if (policy.enforcement?.[key] !== value) {
+        gaps.push(`.wep/policy.json — enforcement.${key} must be ${String(value)}`);
+      }
+    }
+
+    for (const key of Object.keys(expected.writePolicy)) {
+      if (!Array.isArray(policy.writePolicy?.[key]) || policy.writePolicy[key].length === 0) {
+        gaps.push(`.wep/policy.json — writePolicy.${key} must list allowed paths`);
+      }
+    }
+
+    return gaps;
+  } catch {
+    return [".wep/policy.json — invalid JSON (run wep init to regenerate)"];
+  }
+}
+
+async function getLocalPrivacyGaps(cwd: string): Promise<string[]> {
+  const checks = [
+    [localIgnorePath, "must ignore local records and keep only .gitignore trackable"],
+    [upgradesIgnorePath, "must ignore upgrade candidates and keep only .gitignore trackable"],
+  ] as const;
+  const gaps: string[] = [];
+  for (const [relativePath, requirement] of checks) {
+    const current = await readFile(path.join(cwd, relativePath), "utf8").catch(() => undefined);
+    if (current === undefined || isLocalIgnoreContentSafe(current)) continue;
+    gaps.push(`${relativePath} — ${requirement}`);
+  }
+  return gaps;
+}
+
+function arrayIncludes(value: unknown, expected: string): boolean {
+  return Array.isArray(value) && value.includes(expected);
+}
+
+function policyProfile(value: unknown): Profile {
+  return profiles.includes(value as Profile) ? (value as Profile) : "default";
+}
+
+async function getInstalledTargets(
+  cwd: string,
+  config: WepConfig | undefined,
+  activeModules: readonly ModuleName[],
+): Promise<Target[]> {
+  if (!hasModule(activeModules, "tasks")) {
+    return config?.targets ?? [];
+  }
+  const results = await Promise.all(
+    targets.map(async (target) => {
+      const files = targetFilesForModules(activeModules, target);
+      const presence = await Promise.all(files.map((file) => pathExists(path.join(cwd, file))));
+      return presence.some(Boolean) ? target : null;
+    }),
+  );
+  return results.filter((t): t is Target => t !== null);
+}
+
+async function getMissing(cwd: string, files: string[]): Promise<string[]> {
+  const results = await Promise.all(
+    files.map(async (file) => ({ file, exists: await pathExists(path.join(cwd, file)) })),
+  );
+  return results.filter((r) => !r.exists).map((r) => r.file);
+}
+
+async function getConfigGaps(
+  cwd: string,
+  activeModules: readonly ModuleName[],
+): Promise<{ gaps: string[]; installedVersion?: string }> {
+  const configPath = path.join(cwd, ".wep/config.json");
+  if (!(await pathExists(configPath))) return { gaps: [] };
+  try {
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    const gaps: string[] = [];
+    if (
+      !Array.isArray(config.targets) ||
+      !config.targets.some((target: unknown) => targets.includes(target as Target))
+    ) {
+      gaps.push(".wep/config.json — targets must list at least one supported target");
+    }
+    if (
+      config.modules !== undefined &&
+      (!Array.isArray(config.modules) ||
+        !config.modules.some((mod: unknown) => moduleNames.includes(mod as ModuleName)))
+    ) {
+      gaps.push(`.wep/config.json — modules must list at least one valid module (${moduleNames.join(", ")})`);
+    }
+    if (hasModule(activeModules, "tasks")) {
+      if (!config.defaults?.workflow) gaps.push(".wep/config.json — missing defaults.workflow");
+      if (!config.defaults?.allowedWorkflows) gaps.push(".wep/config.json — missing defaults.allowedWorkflows");
+      if (typeof config.defaults?.requireTaskCapsule !== "boolean")
+        gaps.push(".wep/config.json — missing defaults.requireTaskCapsule");
+      if (typeof config.defaults?.requireWorkflowReason !== "boolean")
+        gaps.push(".wep/config.json — missing defaults.requireWorkflowReason");
+      if (!config.workflowRules) gaps.push(".wep/config.json — missing workflowRules");
+    }
+    if (hasModule(activeModules, "comprehension")) {
+      if (typeof config.comprehensionGate?.enabled !== "boolean")
+        gaps.push(".wep/config.json — missing comprehensionGate.enabled");
+      if (typeof config.comprehensionGate?.trigger !== "string" || !config.comprehensionGate.trigger.trim())
+        gaps.push(".wep/config.json — missing comprehensionGate.trigger");
+      if (config.comprehensionGate?.evaluationMode !== "prefer-independent")
+        gaps.push('.wep/config.json — comprehensionGate.evaluationMode must be "prefer-independent"');
+    }
+    if (!Array.isArray(config.templatePacks)) gaps.push(".wep/config.json — missing templatePacks");
+    return { gaps, installedVersion: config.installedVersion };
+  } catch {
+    return { gaps: [".wep/config.json — invalid JSON (run wep init to regenerate)"] };
+  }
+}
+
+async function getInstructionConflicts(cwd: string): Promise<string[]> {
+  const conflicts: string[] = [];
+  for (const file of protectedFiles) {
+    const suggested = suggestedFor(file);
+    if ((await pathExists(path.join(cwd, file))) && (await pathExists(path.join(cwd, suggested)))) {
+      conflicts.push(`${file} has a pending suggested merge: ${suggested}`);
+    }
+  }
+  return conflicts;
+}
+
+function suggestedFor(relativePath: string): string {
+  const ext = path.posix.extname(relativePath);
+  const base = relativePath.slice(0, -ext.length);
+  return `${base}.wep.suggested${ext}`;
+}
+
+const agentEnableCommand: Record<AgentName, string> = {
+  judge: "wep judge enable",
+  comprehension: "wep comprehension enable",
+  implementer: "wep impl enable",
+};
+
+const agentModule: Record<AgentName, ModuleName> = {
+  judge: "judge",
+  comprehension: "comprehension",
+  implementer: "impl",
+};
+
+async function getAgentGaps(cwd: string, activeModules: readonly ModuleName[]): Promise<string[]> {
+  const config = await readConfigForDiagnosis(cwd);
+  if (!config) return [];
+  const gaps: string[] = [];
+  for (const agent of Object.values(resolveAgents(config))) {
+    if (!hasModule(activeModules, agentModule[agent.name])) continue;
+    if (!agent.enabled || agent.targets.length === 0) continue;
+    const expectedFiles = agentFilePathList(agent.name, agent.targets);
+    const present = await Promise.all(expectedFiles.map((file) => pathExists(path.join(cwd, file))));
+    if (present.some((exists) => !exists)) {
+      gaps.push(
+        `\`agents.${agent.name}.enabled\` is true but an agent file is missing. Run \`${agentEnableCommand[agent.name]}\`.`,
+      );
+    }
+  }
+  return gaps;
+}
+
+async function getAgentWarnings(cwd: string, activeModules: readonly ModuleName[]): Promise<string[]> {
+  if (!hasModule(activeModules, "tasks")) return [];
+  const config = await readConfigForDiagnosis(cwd);
+  return config ? agentWarningTexts(config) : [];
+}
+
+function buildSuggestions(
+  installed: boolean,
+  installedTargets: Target[],
+  missing: string[],
+  conflicts: string[],
+  installedVersion?: string,
+  agentGaps: string[] = [],
+): Suggestion[] {
+  const suggestions: Suggestion[] = [];
+
+  if (!installed) {
+    suggestions.push({
+      text: "wep is not installed. Run `wep init --target codex` (or choose interactively with `wep init`).",
+      severity: "error",
+    });
+    return suggestions;
+  }
+
+  if (installedTargets.length === 0) {
+    suggestions.push({
+      text: "No target adapter found. Run `wep init --target <target>` to install one (codex, claude, copilot, or pi).",
+      severity: "error",
+    });
+  }
+
+  if (missing.length > 0) {
+    suggestions.push({
+      text: `${missing.length} file(s) missing. Run \`wep init --target ${installedTargets[0] ?? "codex"}\` to restore them.`,
+      severity: "error",
+    });
+  }
+
+  if (conflicts.length > 0) {
+    suggestions.push({
+      text: "Pending merge files exist. Ask your agent to derive and show the exact minimal diff. It may edit the protected instruction only after you explicitly approve that diff in the current conversation.",
+      severity: "error",
+    });
+  }
+
+  for (const gap of agentGaps) {
+    suggestions.push({ text: gap, severity: "error" });
+  }
+
+  if (installedVersion && installedVersion !== CLI_VERSION) {
+    suggestions.push({
+      text: `Harness was installed with wep v${installedVersion}. Current CLI is v${CLI_VERSION}. Run \`wep upgrade\` to update skill files.`,
+      severity: "warning",
+    });
+  }
+
+  if (suggestions.length === 0) {
+    suggestions.push({
+      text: 'Setup is complete. You can create a task capsule with `wep task "<description>"`.',
+      severity: "info",
+    });
+  }
+
+  return suggestions;
+}
+
+function scoreReadiness(
+  installed: boolean,
+  installedTargets: Target[],
+  missingHarnessFiles: string[],
+  configPolicyGaps: string[],
+  wikiLintIssueCount: number,
+  conflicts: string[],
+): number {
+  if (!installed) return 0;
+
+  let score = 100;
+  if (installedTargets.length === 0) score -= 25;
+  score -= Math.min(missingHarnessFiles.length * 5, 40);
+  score -= Math.min(configPolicyGaps.length * 3, 20);
+  score -= Math.min(wikiLintIssueCount * 1, 10);
+  score -= Math.min(conflicts.length * 10, 40);
+  return Math.max(0, Math.min(100, score));
+}
+
+async function writeDoctorWiki(
+  cwd: string,
+  result: DoctorResult,
+  gapGroups: { missing: string[]; configGaps: string[]; policyGaps: string[]; localPrivacyGaps: string[] },
+  wikiLint: WikiLintResult,
+  options: CommandOptions,
+): Promise<void> {
+  const sections = [
+    { heading: "Missing files", items: gapGroups.missing },
+    { heading: "Config gaps", items: gapGroups.configGaps },
+    { heading: "Policy gaps", items: gapGroups.policyGaps },
+    { heading: "Local privacy gaps", items: gapGroups.localPrivacyGaps },
+  ];
+
+  const wikiOptions = {
+    dryRun: options.dryRun,
+    force: true,
+    reason: "Doctor readiness report.",
+    ignoreFrontmatterTimestamp: true,
+  };
+
+  await Promise.all([
+    writePlannedFile(cwd, ".wep/wiki/agent-setup.md", agentSetupTemplate(result), wikiOptions),
+    writePlannedFile(cwd, ".wep/wiki/gaps.md", gapsTemplate(sections, wikiLint), wikiOptions),
+    writePlannedFile(cwd, ".wep/wiki/recommendations.md", recommendationsTemplate(result.suggestions), wikiOptions),
+  ]);
+}

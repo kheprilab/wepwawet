@@ -1,0 +1,64 @@
+{
+  "name": "wepwawet",
+  "version": "0.8.0",
+  "description": "Local CLI that installs Wepwawet agentic workflow harnesses into repositories.",
+  "type": "module",
+  "bin": {
+    "wep": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --sourcemap --clean",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "prepare": "pnpm build",
+    "wep": "node dist/index.js",
+    "eval": "node evals/cli.mjs run --suite smoke",
+    "eval:compare": "node evals/cli.mjs compare --suite smoke"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": ["dist", "README.md", "docs", "templates"],
+  "dependencies": {
+    "@inquirer/select": "^4.4.2",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/node": "^22.13.5",
+    "esbuild": "^0.27.7",
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.7"
+  },
+  "packageManager": "pnpm@10.5.2",
+  "pnpm": {
+    "overrides": {
+      "postcss": "^8.5.18",
+      "nanoid": "^3.3.17"
+    }
+  },
+  "author": "Aleksandar Manasiev",
+  "license": "MIT",
+  "keywords": [
+    "coding-agents",
+    "harness-engineering",
+    "context-engineering",
+    "claude-code",
+    "codex",
+    "copilot",
+    "workflow",
+    "task-capsule",
+    "AGENTS-md",
+    "CLAUDE-md",
+    "developer-tools",
+    "cli"
+  ],
+  "homepage": "https://kheprilab.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kheprilab/wepwawet.git"
+  }
+}

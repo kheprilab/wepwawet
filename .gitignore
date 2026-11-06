@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+private/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Agent files are generated from src/templates and owned by the provenance manifest,
+# so the dogfooded install is reproducible on a fresh clone. Everything else under
+# .codex stays ignored.
+.codex/*
+!.codex/agents/
+.claude/settings.local.json
+
+# Temporary files
+tmp/
+temp/
+.cache/
+.pnpm-store/
+
+# Local package artifacts
+*.tgz
+
+# Local evaluation artifacts
+evals/results/
+evals/.cache/

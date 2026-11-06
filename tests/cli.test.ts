@@ -1,0 +1,398 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildProgram, main } from "../src/cli.js";
+import { runHook } from "../src/hook/index.js";
+import { runTraceEnable } from "../src/hook/install.js";
+import { runTraceReport } from "../src/hook/report.js";
+import { runImplEnable } from "../src/impl.js";
+import { runInit } from "../src/init.js";
+import { runTask } from "../src/task.js";
+
+let tmp: string;
+let previousCwd: string;
+
+beforeEach(async () => {
+  tmp = await mkdtemp(path.join(os.tmpdir(), "wep-cli-test-"));
+  previousCwd = process.cwd();
+  process.chdir(tmp);
+});
+
+afterEach(async () => {
+  process.chdir(previousCwd);
+  await rm(tmp, { recursive: true, force: true });
+});
+
+function captureLogs(): { logs: string[]; restore: () => void } {
+  const logs: string[] = [];
+  const logSpy = vi.spyOn(console, "log").mockImplementation((message?: unknown) => {
+    logs.push(String(message));
+  });
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  return {
+    logs,
+    restore: () => {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    },
+  };
+}
+
+function captureHelp(args: string[]): string {
+  const program = buildProgram();
+  for (const cmd of program.commands) {
+    cmd.exitOverride();
+    for (const sub of cmd.commands) sub.exitOverride();
+  }
+  program.exitOverride();
+  let out = "";
+  program.configureOutput({
+    writeOut: (str: string) => {
+      out += str;
+    },
+    writeErr: (str: string) => {
+      out += str;
+    },
+  });
+  try {
+    program.parse(["node", "wep", ...args]);
+  } catch (err) {
+    // Commander throws its own errors for help/version instead of exiting when
+    // exitOverride() is active. Swallow those; rethrow real failures.
+    const code = (err as { code?: string }).code;
+    if (!code?.startsWith("commander.")) throw err;
+  }
+  return out;
+}
+
+describe("CLI help snapshots", () => {
+  it("root --help matches snapshot", () => {
+    expect(captureHelp(["--help"])).toMatchSnapshot();
+  });
+
+  const subcommands = [
+    "init",
+    "templates",
+    "doctor",
+    "status",
+    "config",
+    "task",
+    "compile",
+    "comprehension",
+    "impl",
+    "judge",
+    "trace",
+    "upgrade",
+    "migrate",
+    "remove",
+  ];
+  it.each(subcommands)("%s --help matches snapshot", (subcommand) => {
+    expect(captureHelp([subcommand, "--help"])).toMatchSnapshot();
+  });
+
+  it("judge snapshot help distinguishes the immutable snapshot ID from the review record", () => {
+    const help = captureHelp(["judge", "snapshot", "--help"]);
+    expect(help).toContain("--allow-empty");
+    expect(help).toContain("SNAPSHOT:<id>");
+    expect(help).toContain("<review.json>");
+  });
+});
+
+describe("CLI layer — main(argv)", () => {
+  it("init --target codex --json writes a harness and prints JSON", async () => {
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    } finally {
+      restore();
+    }
+    const parsed = JSON.parse(logs.join("\n"));
+    expect(parsed.selectedTargets).toEqual(["codex"]);
+  });
+
+  it("doctor --json reports installed state", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "doctor", "--json"]);
+    } finally {
+      restore();
+    }
+    const parsed = JSON.parse(logs.join("\n"));
+    expect(parsed.installed).toBe(true);
+  });
+
+  it("doctor --json carries capsule implementation-log findings", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    const taskDir = path.join(tmp, ".wep/tasks/TASK-001-demo");
+    await mkdir(taskDir, { recursive: true });
+    await writeFile(path.join(taskDir, "log.md"), "# Implementation log\n", "utf8");
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "doctor", "--json"]);
+    } finally {
+      restore();
+    }
+    const parsed = JSON.parse(logs.join("\n"));
+    expect(parsed.capsuleLogs).toEqual([{ taskId: "TASK-001", path: ".wep/tasks/TASK-001-demo/log.md" }]);
+    expect(parsed.suggestions.some((s: { text: string }) => s.text.includes("TASK-001"))).toBe(true);
+  });
+
+  it("doctor --fix --json actually repairs a deleted harness file (fails until C1)", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    const { rm: rmFile } = await import("node:fs/promises");
+    await rmFile(path.join(tmp, ".agents/skills/wep-doctor/SKILL.md"), { force: true });
+
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "doctor", "--fix", "--json"]);
+    } finally {
+      restore();
+    }
+    const parsed = JSON.parse(logs.join("\n"));
+    expect(parsed.fixed?.some((f: string) => f.includes("wep-doctor/SKILL.md"))).toBe(true);
+    const { pathExists } = await import("../src/fs-utils.js");
+    expect(await pathExists(path.join(tmp, ".agents/skills/wep-doctor/SKILL.md"))).toBe(true);
+  });
+
+  it("task create ... --json creates a task capsule", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "task", "create", "Fix auth bug", "--json"]);
+    } finally {
+      restore();
+    }
+    const parsed = JSON.parse(logs.join("\n"));
+    expect(parsed.taskId).toBe("TASK-001");
+  });
+
+  it("task <description> --json (backwards-compatible positional form) creates a task capsule", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "task", "Fix auth bug", "--json"]);
+    } finally {
+      restore();
+    }
+    const parsed = JSON.parse(logs.join("\n"));
+    expect(parsed.taskId).toBe("TASK-001");
+  });
+
+  it("task search prints citables matches and an exact JSON array", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    await runTask("Search fixture", { cwd: tmp, nonInteractive: true });
+    await writeFile(path.join(tmp, ".wep/tasks/TASK-001-search-fixture/task.md"), "hallazgo\n", "utf8");
+
+    const human = captureLogs();
+    try {
+      await main(["node", "wep", "task", "search", "hallazgo"]);
+    } finally {
+      human.restore();
+    }
+    expect(human.logs.join("\n")).toContain(".wep/tasks/TASK-001-search-fixture/task.md:1");
+    expect(human.logs.join("\n")).toContain("hallazgo");
+
+    const json = captureLogs();
+    try {
+      await main(["node", "wep", "task", "search", "hallazgo", "--json"]);
+    } finally {
+      json.restore();
+    }
+    expect(JSON.parse(json.logs.join("\n"))).toEqual([
+      {
+        taskId: "TASK-001",
+        taskDir: ".wep/tasks/TASK-001-search-fixture",
+        file: ".wep/tasks/TASK-001-search-fixture/task.md",
+        line: 1,
+        text: "hallazgo",
+      },
+    ]);
+
+    const empty = captureLogs();
+    try {
+      await main(["node", "wep", "task", "search", "ausente", "--json"]);
+    } finally {
+      empty.restore();
+    }
+    expect(JSON.parse(empty.logs.join("\n"))).toEqual([]);
+  });
+
+  it("task continuation reports legacy missing state and invalid JSON with exit code 1", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    await runTask("Continuation fixture", { cwd: tmp, nonInteractive: true });
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      const missing = captureLogs();
+      try {
+        await main(["node", "wep", "task", "continuation", "TASK-001", "--json"]);
+      } finally {
+        missing.restore();
+      }
+      expect(process.exitCode).toBe(0);
+      expect(JSON.parse(missing.logs.join("\n"))).toMatchObject({
+        taskId: "TASK-001",
+        status: "missing",
+        executionState: "unknown",
+        permission: "not-evaluated",
+        verification: "not-evaluated",
+      });
+
+      await writeFile(path.join(tmp, ".wep/tasks/TASK-001-continuation-fixture/continuation.json"), "not json", "utf8");
+      const invalid = captureLogs();
+      try {
+        await main(["node", "wep", "task", "continuation", "TASK-001", "--json"]);
+      } finally {
+        invalid.restore();
+      }
+      expect(process.exitCode).toBe(1);
+      expect(JSON.parse(invalid.logs.join("\n"))).toMatchObject({ status: "invalid", record: null });
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it("compile ... --json compiles a brief", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+    await main(["node", "wep", "task", "create", "Fix auth bug", "--json"]);
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "compile", "TASK-001", "--target", "codex", "--json"]);
+    } finally {
+      restore();
+    }
+    const parsed = JSON.parse(logs.join("\n"));
+    expect(parsed.outputPath).toContain("codex.md");
+  });
+
+  it("comprehension enable/status/disable works through the CLI", async () => {
+    await main(["node", "wep", "init", "--target", "codex", "--json"]);
+
+    for (const [command, expected] of [
+      ["enable", true],
+      ["status", true],
+      ["disable", false],
+    ] as const) {
+      const { logs, restore } = captureLogs();
+      try {
+        await main(["node", "wep", "comprehension", command, "--json"]);
+      } finally {
+        restore();
+      }
+      const parsed = JSON.parse(logs.join("\n"));
+      expect(parsed.enabled).toBe(expected);
+      expect(parsed.localIgnoreValid).toBe(true);
+    }
+  });
+
+  it("renders an unknown first-mutation ordering instead of a false zero-percent result", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await runTraceEnable({ cwd: tmp, nonInteractive: true });
+    const task = await runTask("Add invoice API", { cwd: tmp, nonInteractive: true });
+    const emit = (event: string, body: Record<string, unknown>) => runHook(event, JSON.stringify(body), tmp);
+    const shell = { tool_name: "Bash", tool_use_id: "shell", tool_input: { command: "ls" } };
+    const edit = { tool_name: "Edit", tool_use_id: "edit", tool_input: { file_path: "src/a.ts" } };
+
+    await emit("SessionStart", { session_id: "unknown-order" });
+    await emit("PreToolUse", { session_id: "unknown-order", ...shell });
+    await emit("PostToolUse", { session_id: "unknown-order", ...shell, tool_result: { exit_code: 0 } });
+    await emit("PreToolUse", {
+      session_id: "unknown-order",
+      tool_name: "Read",
+      tool_input: { file_path: `${task.taskDir}/task.md` },
+    });
+    await emit("PreToolUse", { session_id: "unknown-order", ...edit });
+    await emit("PostToolUse", { session_id: "unknown-order", ...edit, tool_result: { exit_code: 0 } });
+    await emit("SessionEnd", { session_id: "unknown-order" });
+
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "trace", "report"]);
+    } finally {
+      restore();
+    }
+    const orderingLine = logs.find((line) => line.includes("capsule bound first"));
+    expect(orderingLine).toContain("unknown");
+    expect(orderingLine).not.toContain("0%");
+  });
+
+  it("uses only known first-mutation orderings in the human percentage", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await runTraceEnable({ cwd: tmp, nonInteractive: true });
+    const task = await runTask("Add invoice API", { cwd: tmp, nonInteractive: true });
+    const emit = (event: string, body: Record<string, unknown>) => runHook(event, JSON.stringify(body), tmp);
+    const capsule = { tool_name: "Read", tool_input: { file_path: `${task.taskDir}/task.md` } };
+    const completedEdit = async (sessionId: string, callId: string) => {
+      const edit = {
+        session_id: sessionId,
+        tool_name: "Edit",
+        tool_use_id: callId,
+        tool_input: { file_path: "src/a.ts" },
+      };
+      await emit("PreToolUse", edit);
+      await emit("PostToolUse", { ...edit, tool_result: { exit_code: 0 } });
+    };
+
+    await emit("SessionStart", { session_id: "ordered-true" });
+    await emit("PreToolUse", { session_id: "ordered-true", ...capsule });
+    await completedEdit("ordered-true", "true-edit");
+    await emit("SessionEnd", { session_id: "ordered-true" });
+
+    await emit("SessionStart", { session_id: "ordered-false" });
+    await completedEdit("ordered-false", "false-edit");
+    await emit("PreToolUse", { session_id: "ordered-false", ...capsule });
+    await emit("SessionEnd", { session_id: "ordered-false" });
+
+    const shell = { tool_name: "Bash", tool_use_id: "unknown-shell", tool_input: { command: "ls" } };
+    await emit("SessionStart", { session_id: "ordered-unknown" });
+    await emit("PreToolUse", { session_id: "ordered-unknown", ...shell });
+    await emit("PostToolUse", { session_id: "ordered-unknown", ...shell, tool_result: { exit_code: 0 } });
+    await emit("PreToolUse", { session_id: "ordered-unknown", ...capsule });
+    await completedEdit("ordered-unknown", "unknown-edit");
+    await emit("SessionEnd", { session_id: "ordered-unknown" });
+
+    expect((await runTraceReport({ cwd: tmp, nonInteractive: true })).totals).toMatchObject({
+      orderingKnown: 2,
+      orderingUnknown: 1,
+      capsuleBeforeFirstMutation: 1,
+    });
+
+    const { logs, restore } = captureLogs();
+    try {
+      await main(["node", "wep", "trace", "report"]);
+    } finally {
+      restore();
+    }
+    expect(logs.find((line) => line.includes("First-mutation ordering unknown:"))).toContain("1");
+    expect(logs.find((line) => line.includes("capsule bound first"))).toContain("1 (50% of 2 known)");
+  });
+
+  it("refuses invalid TDD evidence before persistence and reports a non-zero CLI result", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    const task = await runTask("TDD evidence refusal", { cwd: tmp, workflow: "TDD", nonInteractive: true });
+    await writeFile(
+      path.join(tmp, "record.json"),
+      JSON.stringify({
+        criteria: ["AC-1"],
+        files: ["src/a.ts"],
+        validation: [{ command: "pnpm test", status: "passed", output: "ok", phase: "green" }],
+      }),
+      "utf8",
+    );
+
+    const { logs, restore } = captureLogs();
+    process.exitCode = 0;
+    try {
+      await main(["node", "wep", "impl", "log", task.taskId, "--record", "record.json"]);
+    } finally {
+      restore();
+    }
+    expect(process.exitCode).toBe(1);
+    expect(logs.join("\n")).toContain("refused");
+    expect(logs.join("\n")).not.toContain("round recorded");
+    process.exitCode = 0;
+  });
+});

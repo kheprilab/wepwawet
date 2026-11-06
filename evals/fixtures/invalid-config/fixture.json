@@ -1,0 +1,6 @@
+{
+  "files": {
+    ".wep/config.json": "{ invalid json\n"
+  },
+  "git": true
+}

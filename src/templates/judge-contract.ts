@@ -1,0 +1,225 @@
+import { JUDGE_SCHEMA_VERSION, LEGACY_JUDGE_SCHEMA_VERSION } from "../judge-enforcement.js";
+
+const json = (value: unknown) => JSON.stringify(value, null, 2);
+
+export const JUDGE_SCHEMA_ID = `wep-judge-review-v${JUDGE_SCHEMA_VERSION}`;
+
+const reviewSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  $id: JUDGE_SCHEMA_ID,
+  type: "object",
+  additionalProperties: false,
+  required: ["schemaVersion", "taskId", "scope", "verdict", "tests", "criteria", "observations", "reviewedAt"],
+  properties: {
+    schemaVersion: { const: JUDGE_SCHEMA_VERSION },
+    taskId: { type: "string", pattern: "^TASK-[0-9]+$" },
+    scope: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "schemaVersion",
+        "cliVersion",
+        "taskId",
+        "base",
+        "candidate",
+        "baseCommit",
+        "candidateCommit",
+        "changedFiles",
+        "emptyBoundaryAuthorized",
+        "excludedPaths",
+        "includedTaskIds",
+        "taskDigest",
+        "changeDigest",
+        "scopeDigest",
+      ],
+      properties: {
+        schemaVersion: { const: JUDGE_SCHEMA_VERSION },
+        cliVersion: { type: "string", minLength: 1 },
+        taskId: { type: "string", pattern: "^TASK-[0-9]+$" },
+        base: { type: "string", pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        baseRef: { type: "string", minLength: 1 },
+        candidate: { type: "string", minLength: 1 },
+        baseCommit: { type: "string", pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        candidateCommit: { type: "string", pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        changedFiles: { type: "array", items: { type: "string" }, uniqueItems: true },
+        emptyBoundaryAuthorized: { type: "boolean" },
+        excludedPaths: { type: "array", items: { type: "string" }, uniqueItems: true },
+        includedTaskIds: { type: "array", items: { type: "string", pattern: "^TASK-[0-9]+$" }, uniqueItems: true },
+        taskDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        changeDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        scopeDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+      },
+    },
+    verdict: { enum: ["APPROVED", "NEEDS_CHANGES", "BLOCKED"] },
+    tests: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["command", "status"],
+        properties: {
+          command: { type: "string", minLength: 1 },
+          status: { enum: ["passed", "failed", "not-run"] },
+          evidence: { type: "string" },
+        },
+      },
+    },
+    criteria: {
+      type: "array",
+      description:
+        "One entry per AC-<n> the capsule declares. The only channel that can block APPROVED. A declared proof (proof-command:, proof-doc:) adds no field here; it constrains verification only.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "status", "evidence"],
+        properties: {
+          id: { type: "string", pattern: "^AC-[1-9][0-9]*$" },
+          status: { enum: ["pass", "fail", "not-evaluated"] },
+          evidence: { type: "string", minLength: 1 },
+        },
+      },
+    },
+    observations: {
+      type: "array",
+      description: "Defects outside the declared criteria. Never blocks APPROVED.",
+      items: { type: "string" },
+    },
+    reviewedAt: { type: "string", format: "date-time" },
+    receiptDigest: {
+      type: "string",
+      pattern: "^sha256:[0-9a-f]{64}$",
+      description:
+        "The validation receipt the judge read: sha256: followed by the receipt file name without .json. Must equal the digest the trusted caller pins in judge verify --receipt-digest.",
+    },
+    independent: {
+      type: "boolean",
+      description:
+        "Whether the reviewer was independent of the implementation. Absent means true. Set false when the reviewer is the same session/agent that implemented or runs on a host with no subagent isolation (Pi).",
+    },
+  },
+  allOf: [
+    {
+      if: { properties: { verdict: { const: "APPROVED" } }, required: ["verdict"] },
+      // biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then keyword, not a thenable
+      then: {
+        properties: {
+          tests: {
+            contains: { properties: { status: { const: "passed" } }, required: ["status"] },
+          },
+          criteria: {
+            minItems: 1,
+            items: { properties: { status: { const: "pass" } }, required: ["status"] },
+          },
+        },
+      },
+    },
+  ],
+};
+
+export const judgeContractFiles: Record<string, string> = {
+  ".wep/judge/README.md": `# Judge Enforcement Contract
+
+The trusted caller normally captures \`wep judge snapshot TASK-XXX --base <ref>\` before invoking the judge. Capture creates an immutable ignored local copy without committing, staging, stashing, checking out, creating refs, or changing live files. The private repository is shallow, policy-blocked paths are absent from its reviewable worktree, it holds source only with no dependency directory, and \`wep judge prune --keep <n>\` provides dry-run-first retention. The trusted caller then runs \`wep judge run TASK-XXX --candidate SNAPSHOT:<id>\`, which executes the declared validation once and prints the receipt path and digest, and gives the judge the receipt path. The judge runs \`wep judge scope TASK-XXX --base <ref> --candidate SNAPSHOT:<id> --json\`, copies that exact scope into its review record, and executes no validation. Commit and legacy \`WORKTREE\` candidates remain supported.
+
+Scope and snapshot capture fail closed when changed files include a different task capsule under \`.wep/tasks/TASK-YYY-*\`. The error lists every foreign task ID and path; isolate the worktree or explicitly repeat \`--include-task TASK-YYY\` on \`judge scope\` or \`judge snapshot\`. Explicit inclusions are recorded in \`scope.includedTaskIds\` and bound to \`scopeDigest\`; catch-up snapshots preserve the parent's decision. Other changed files remain in the boundary — wep does not infer or silently omit source files.
+
+An empty boundary is rejected by \`judge snapshot\` unless the caller passes \`--allow-empty\`. That explicit authorization is recorded as \`emptyBoundaryAuthorized: true\` in the snapshot metadata and scope and is part of the snapshot identity; ordinary snapshots keep it false. The human \`SNAPSHOT:<id>\` is the immutable capture ID, while a later \`<review.json>\` is the separate judge verdict record.
+
+Before using an approval, run \`wep judge verify <review.json> --receipt-digest <digest>\` with the digest \`judge run\` printed, or \`--run-tests\` for a fresh run. Verification checks the record shape and recomputes SHA-256 digests for the task capsule and exact code boundary. A snapshot approval remains valid when the live workspace moves; tampering with the snapshot or any catch-up ancestor invalidates it. \`wep judge current <review.json>\` first rejects an invalid or non-approved record, then reports whether live content is \`CURRENT\`, has \`NEWER_CHANGES\`, or \`DIVERGED\`. This binds a verdict to evidence; it does not cryptographically prove which model produced the verdict.
+
+An \`APPROVED\` verdict additionally requires evidence and coherence:
+
+- at least one entry in \`tests\` with \`status: "passed"\` — an approval that ran nothing is not an approval
+- \`status: "pass"\` on every entry in \`criteria\`, with exactly one entry per \`AC-<n>\` the capsule declares — a missing or extra identifier fails verification and the error names it
+- defects outside the declared criteria belong in \`observations\`, which never blocks approval
+
+A \`failed\` entry in \`tests\` invalidates the record under any verdict. If there is no usable validation receipt, the correct verdict is \`BLOCKED\`, not \`APPROVED\`.
+
+## Criterion identifiers
+
+Every top-level \`- \` bullet in the capsule's \`acceptance-criteria.md\` is one criterion and starts with \`AC-<n>: \`. Indented lines continue the bullet above them. Identifiers are unique inside one capsule; a missing, malformed, or duplicate identifier is reported with the offending file line and blocks verification. \`wep task migrate-criteria [TASK-ID]\` numbers an older capsule mechanically.
+
+The record reports one \`criteria\` entry per declared identifier, each with a \`status\` and non-empty \`evidence\`. A reference is always the identifier, never a position, so a bullet inserted or reordered between two rounds cannot silently repoint an existing finding. \`criteria\` is the only blocking channel: a defect the capsule does not declare goes to \`observations\` and becomes a separate decision instead of a blocker on the current round.
+
+## Declared proof
+
+A criterion can declare expected evidence on indented lines under its own bullet:
+
+\`\`\`text
+- AC-1: The requested behavior is implemented.
+  proof-command: pnpm test
+  proof-doc: docs/behavior.md#Behavior
+\`\`\`
+
+Only \`proof-command:\` and \`proof-doc:\` exist. One reference per line, with a single-line value. Identical repeated references count once. Both are optional, and existing capsules need no change. An empty, orphaned, or unsupported proof line, or a \`proof-doc:\` that is absolute, uses \`..\`, is a URL, or matches \`blockedReadPatterns\`, is a capsule defect reported with its file line. Such a reference is never read or fetched.
+
+A \`proof-command:\` must match a command in the \`## Validation\` block of \`task.md\` after trimming and removal of a trailing \`# optional\` marker from both the \`proof-command:\` value and the \`## Validation\` line. It adds no execution channel: only declared commands ever run. Several \`proof-command:\` lines on one criterion are all necessary, and a command that is optional for the whole task is necessary for a criterion that names it.
+
+Verification separates rejection reasons from non-blocking notices, and both can appear together:
+
+Rejection reasons (\`reasons\`):
+
+- \`proof requirement unmet\`: the command is not declared, or the record has no passing evidence for it (absent, \`failed\`, or \`not-run\`), or its observed re-run failed. This blocks a claimed pass for that criterion.
+- \`criterion not evaluated\`: the record reports \`not-evaluated\` for a criterion that declares a proof. This is a rejection reason and never hides an unmet proof.
+
+Notices (\`notices\`):
+
+- \`execution not observed: command accepted on trust\`: the record claims the command passed, and neither a pinned receipt nor \`--run-tests\` observed it. This is a notice. The record stays valid under the usual rules. A passing receipt entry or a successful observed re-run removes it.
+- \`proof-doc \\\`<ref>\\\` unavailable\`: the referenced document is missing, not a regular file, leaves the repository, or its \`#Heading\` fragment was not found in the target document.
+
+A passing command is a necessary condition, never a verdict. The judge still decides whether the criterion is satisfied, and the record can report \`fail\` next to a passing command. A \`proof-doc:\` only points the judge at repository content, including unchanged files in the boundary. It never gates. A missing document or a \`#Heading\` fragment that does not match any Markdown heading in the target file is reported as unavailable, a link that leaves the repository is not followed, and file or heading existence alone proves nothing. The record shape does not change, and wep does not read per-test results from reporter output.
+
+\`wep judge verify\` also reads a stored schema version ${LEGACY_JUDGE_SCHEMA_VERSION} record, which carried a free-form \`issues\` list. Such a record is verified under the version ${LEGACY_JUDGE_SCHEMA_VERSION} rules, reported as legacy, and never emitted again.
+
+When the capsule's \`task.md\` declares commands in a fenced block under \`## Validation\`, every required command — any non-empty line not starting with \`#\` and not suffixed \`# optional\` — must pass for \`APPROVED\`. A line suffixed \`# optional\` may fail; that is reported as a warning and does not block approval. At least one declared command must still be the passing entry in \`tests\`; a judge cannot satisfy the evidence rule with a command it invented, even when every declared command is optional. A single \`no-runtime-validation: <reason>\` line inside the fence declares no runtime validation; it requires a non-empty reason and zero commands, and does not claim any code was verified. A capsule with no \`## Validation\` section is legacy: verification reports \`verifiedNow: unknown\`, but the record's historical \`approved\` verdict can still stand.
+
+## Validation receipt
+
+\`wep judge run TASK-XXX --candidate SNAPSHOT:<id>\` runs every command in the capsule's \`## Validation\` block once, in declared order. By default it runs in the live working tree, with the project's own environment: before running, the live content over the snapshot's coverage (tracked plus untracked-not-ignored, without blocked paths) must equal the snapshot's, and after running it must still be equal. A change to a covered file invalidates the run (exit code 5); Git-ignored output may change. \`--isolated\` runs in a disposable copy of the snapshot with dependencies installed from the lockfile instead. A run holds \`.wep/local/judge/run.lock\` (PID, host, start time, task, snapshot) until it ends; a second run exits with 4, a dead same-host holder is reclaimed, and a holder on another host needs \`--break-lock\`. Exit codes: 0 passed, 1 a required command failed, 3 approval missing, 4 lock busy, 5 invalidated, 6 the tree no longer matches the snapshot. \`wep status\` shows a run in progress. For Claude Code, a guard hook in \`.claude/settings.local.json\`, installed with the judge, refuses file-writing tools while the lock is held; other hosts rely on the after-run check. Declare check-mode commands in \`## Validation\` (for example \`--check\` instead of \`--write\`): a command that rewrites a covered file invalidates its own in-place run. \`judge run\` needs the same approval as \`--run-tests\`: commands pre-approved with \`wep task approve-commands\`, the terminal prompt, or \`--approve-commands\` once per command. It writes a receipt to \`.wep/local/judge/snapshots/<id>/receipts/<digest>.json\` and prints the path and the SHA-256 digest. The receipt records the task, the snapshot, the snapshot review digests, the normalized command list, a digest of the project's lockfiles, the CLI version, any boundary drift that validation caused, and each command's status, exit code and bounded redacted failure evidence. Version 2 receipts also record \`mode\` (\`in-place\` or \`isolated\`) and, for in-place runs, the before and after content digests; the two modes prove different things, since an in-place run used the developer's environment, which may not match the lockfile. It records no Node version, architecture or operating system. \`wep judge prune\` removes receipts together with their snapshot.
+
+The judge reads the receipt and executes nothing. \`wep judge verify <review.json> --receipt-digest <digest>\` executes nothing either. It rejects the receipt when its bytes do not hash to the pinned digest, or when its snapshot, review digests, command list or lockfile digest no longer match. It also rejects a required command that did not pass, a command the record claims passed without a passing receipt entry, and a record \`receiptDigest\` that differs from the pinned digest. Each reason names the binding or the command. \`--receipt-digest\` and \`--run-tests\` cannot be combined. \`wep judge snapshot --from-review <review.json> --receipt-digest <digest>\` verifies a catch-up parent the same way.
+
+A local receipt cannot authenticate its writer, and the judge has a shell. Its trust comes from the digest the trusted caller saw \`judge run\` print and pinned in its own context, never from the file or from the record. The receipt is therefore not transferable: another reader who did not observe the run learns nothing from it.
+
+## Independent re-execution
+
+\`wep judge verify <review.json> --run-tests\` re-runs the capsule-declared commands the record claims passed, instead of trusting the claim. It requires a snapshot candidate — a \`WORKTREE\` or commit-ref record is refused — and it never executes without operator approval: the CLI prints the declared commands and asks in a terminal, or requires \`--approve-commands\` once per command in declared order when headless. Commands run in a disposable copy outside the live project whose dependencies are materialised from the committed lockfile, not inherited from the snapshot's private copy, so re-execution rests on the lockfile rather than on bytes inside the reviewed artifact; if the boundary declares dependencies but has no lockfile, or the install fails, verification fails with a named reason and never falls back to the snapshot's copy. The disposable copy cannot corrupt the immutable snapshot through ordinary relative writes. Verification still fails if validation rewrites tracked content. This is process isolation for normal tooling, not an OS sandbox for an intentionally malicious command with absolute paths.
+
+Run it from the trusted caller, before any handoff, when you want a fresh run instead of the pinned receipt. The judge executes no validation and never passes this flag. The comprehension evaluator checks the record without executing validation.
+
+## What this does and does not prove
+
+It proves the verdict is bound to a specific task capsule and code boundary, that the boundary still matches the repository, and — with \`--receipt-digest\` or \`--run-tests\` — that the declared validation really passed for that boundary and left it intact.
+
+The snapshot integrity check fingerprints every tracked and untracked-but-not-ignored path by its content *and* its change-time (ctime), so a file changed and restored to its original bytes — or a file created and deleted inside a tracked directory — is still reported as a modification after capture, not only a final content mismatch. The inode number is deliberately not part of the fingerprint: on FUSE and some network mounts it is synthesized by the daemon and drifts over time even when nothing changed, which would make an honest snapshot permanently unreviewable. Ignored paths are outside this manifest, and capture builds nothing: a build output that Git ignores is absent from the snapshot, so a validation that needs it declares the build command before the commands that use it. Dependencies remain untrusted, which is why \`judge run\` and \`--run-tests\` materialise them from the lockfile instead of trusting the snapshot's copy. This is tamper-evident bookkeeping, not a sandbox — a determined reviewer with shell access can still damage things wep cannot see.
+
+It does not prove which model produced the verdict. The judge is read-only by design, so a trusted caller writes the record, and that caller could in principle write one the judge never produced. Nothing in this repository can close that gap. The mitigation is human: the judge's prose review appears in the session transcript, and the developer reads it. Treat a verified record as tamper-evident bookkeeping, not as an unforgeable signature.
+
+A pinned receipt and \`--run-tests\` narrow that gap without closing it. A review record can never inject a command, because only declared commands run. The capsule itself is normally written by the primary agent, so the declared commands are agent-authored project content — which is why the approval prompt exists: the human, not the capsule, decides what executes. That makes the operator the last barrier rather than a compromised primary agent, but it is only as strong as the attention paid to the list. Read it before approving work you did not supervise.
+
+## Mechanical change reproduction
+
+\`wep judge reproduce TASK-XXX --base <ref> --candidate SNAPSHOT:<id>\` checks that a declared generator produces exactly the generated paths of a snapshot. It adds evidence about the result. It does not approve the generator and it does not review any other change.
+
+Land and review the generator first, as ordinary code. A later change can then declare it in one fenced JSON object under \`## Migration\` in \`task.md\`, with \`generator\` (\`command\`, \`commit\`, \`review\`, \`inputs\`, \`prepare\`) and \`paths\` keys. \`commit\` is the full landed Git SHA and must be an ancestor of the base. \`review\` is a stored, verified APPROVED record whose candidate is a snapshot. Every file in \`inputs\` must be identical in that reviewed content, in the landed commit and in the base. A generator that only exists in the candidate, or that changed after it landed, is refused. \`paths\` lists exact files: no globs, no directories, no absolute paths, no \`..\`, no \`.git\`, no blocked paths and no symlinked ancestors.
+
+The runner prepares the tool in an external disposable workspace from base inputs and the committed lockfile. It sets \`WEP_GENERATOR_ROOT\` to that workspace and shows the value with the command list. It runs the generator in a separate disposable worktree extracted from the base. Before anything runs, it builds the complete ordered list: the frozen lockfile install when \`package.json\` declares dependencies, the \`prepare\` commands, then the generator. The operator approves that list in a terminal. Headless, pass \`--approve-commands\` once per command, in the printed order. Without approval nothing runs.
+
+Each declared path is compared to the snapshot by bytes, existence, file type, executable bit and symlink target, without following the target. These cases are errors, and each names its paths:
+
+- a generated path that differs from the candidate
+- a declared path that is identical in the base, the candidate and the reproduction
+- any detected write outside \`paths\`, including ignored outputs and a write that restores the original bytes
+
+A run on the candidate that changes nothing proves only idempotency, so reproduction always starts from the base.
+
+\`--include-task\` stays required for every foreign task capsule. A declaration never grants capture scope and a successful reproduction never replaces it. Changes outside \`paths\` still need ordinary review, and a change to the generator needs a new first-step review.
+
+The report goes to stdout and the exit code. The command writes no file and creates no receipt that another reader can trust. The live project and the snapshot are only read. This is process isolation, not an OS sandbox: a command that writes outside the disposable workspaces by absolute path is not observed. Read the command list before you approve it.
+
+## Withheld paths
+
+Files matching \`blockedReadPatterns\` in \`policy.json\` are excluded from the diff and listed by path in \`scope.excludedPaths\`. Their contents are never read or fingerprinted. The path list is part of the boundary digest, so a secret appearing or disappearing still invalidates a stale approval. A judge that cannot review meaningfully without those files should report \`BLOCKED\`.
+`,
+  ".wep/judge/schemas/review.schema.json": json(reviewSchema),
+};

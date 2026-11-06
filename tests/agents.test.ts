@@ -1,0 +1,1477 @@
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { agentWarningTexts, resolveAgent, resolveAgents } from "../src/agents.js";
+import { main } from "../src/cli.js";
+import { runComprehensionEnable } from "../src/comprehension.js";
+import { normalizeConfig, readConfig, setConfigValue } from "../src/config.js";
+import { runDoctor } from "../src/doctor.js";
+import { pathExists } from "../src/fs-utils.js";
+import { capsuleFiles } from "../src/harness-files.js";
+import {
+  implLogPath,
+  parseLog,
+  parseRecordInput,
+  runImplEnable,
+  runImplLog,
+  runImplStart,
+  runImplStatus,
+} from "../src/impl.js";
+import { runInit } from "../src/init.js";
+import { createJudgeScope } from "../src/judge-enforcement.js";
+import { runJudgeDisable, runJudgeEnable, runJudgeStatus } from "../src/judge.js";
+import { runStatus } from "../src/status.js";
+import { runTask } from "../src/task.js";
+import { mainInstructionTemplate } from "../src/templates/instructions.js";
+import { targets as targetNames } from "../src/types.js";
+import { runUpgrade } from "../src/upgrade.js";
+
+let tmp: string;
+const execFileAsync = promisify(execFile);
+
+/** A committed base, so `judge scope` has a boundary to compute against. */
+async function commitBase(): Promise<void> {
+  await execFileAsync("git", ["init"], { cwd: tmp });
+  await execFileAsync("git", ["config", "user.email", "tests@example.com"], { cwd: tmp });
+  await execFileAsync("git", ["config", "user.name", "wep tests"], { cwd: tmp });
+  await execFileAsync("git", ["add", "."], { cwd: tmp });
+  await execFileAsync("git", ["commit", "-m", "base"], { cwd: tmp });
+}
+
+beforeEach(async () => {
+  tmp = await mkdtemp(path.join(os.tmpdir(), "wep-agents-"));
+});
+
+afterEach(async () => {
+  await rm(tmp, { recursive: true, force: true });
+});
+
+const configPath = () => path.join(tmp, ".wep/config.json");
+
+async function readRawConfig(): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(configPath(), "utf8"));
+}
+
+async function writeRawConfig(mutate: (config: Record<string, never>) => void): Promise<void> {
+  const config = await readRawConfig();
+  mutate(config as never);
+  await writeFile(configPath(), `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+// ── schema and compatibility ─────────────────────────────────────────────────
+
+describe("agents configuration", () => {
+  it("resolves every field of a fully specified agents block", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, {
+        agents: {
+          judge: { enabled: true, trigger: "post-implementation", targets: ["claude"], model: { claude: "opus" } },
+          comprehension: { enabled: true, trigger: "agent-assessed-significance" },
+          implementer: { enabled: true, maxAttempts: 5, model: { codex: "gpt-5-codex" } },
+        },
+      });
+    });
+
+    const config = await readConfig(tmp);
+    if (!config) throw new Error("config missing");
+    const agents = resolveAgents(config);
+
+    expect(agents.judge.enabled).toBe(true);
+    expect(agents.judge.targets).toEqual(["claude"]);
+    expect(agents.judge.model.claude).toBe("opus");
+    expect(agents.comprehension.enabled).toBe(true);
+    expect(agents.implementer.maxAttempts).toBe(5);
+    expect(agents.implementer.model.codex).toBe("gpt-5-codex");
+  });
+
+  it("warns about an agent entry wep has no command behind, without failing", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { reviewer: { enabled: true } } });
+    });
+
+    const config = await readConfig(tmp);
+    const warnings = agentWarningTexts(config as never);
+    expect(warnings.some((text) => /agents.reviewer/.test(text))).toBe(true);
+    expect(warnings.some((text) => /judge, comprehension, implementer/.test(text))).toBe(true);
+    expect(resolveAgents(config as never).judge.enabled).toBe(true);
+    expect(resolveAgents(config as never).implementer.enabled).toBe(false);
+  });
+
+  it("preserves an unknown agent entry across a read and a write", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, {
+        agents: { reviewer: { enabled: true, model: { claude: "opus" }, depth: 3 }, judge: { enabled: true } },
+      });
+    });
+
+    await setConfigValue(tmp, "agents.judge.trigger", "post-implementation", false);
+    const raw = await readRawConfig();
+    expect((raw.agents as Record<string, unknown>).reviewer).toEqual({
+      enabled: true,
+      model: { claude: "opus" },
+      depth: 3,
+    });
+  });
+
+  it("still rejects a malformed agents block and an invalid attempt budget", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: ["judge"] });
+    });
+    await expect(readConfig(tmp)).rejects.toThrow(/"agents" must be an object/);
+
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { implementer: { maxAttempts: 0 } } });
+    });
+    await expect(readConfig(tmp)).rejects.toThrow(/maxAttempts must be a positive integer/);
+  });
+
+  it("treats an empty entry as an absent one", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    const before = resolveAgents((await readConfig(tmp)) as never);
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { judge: {}, comprehension: {}, implementer: {} } });
+    });
+
+    const after = resolveAgents((await readConfig(tmp)) as never);
+    expect(after).toEqual(before);
+  });
+
+  it("uses post-clarification as the implementer trigger default", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { implementer: { enabled: true } } });
+    });
+
+    expect(resolveAgent((await readConfig(tmp)) as never, "implementer").trigger).toBe("post-clarification");
+  });
+
+  it("loads a configuration written before the agents block and behaves identically", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, {
+        judge: { enabled: true, trigger: "post-implementation" },
+        comprehensionGate: {
+          enabled: true,
+          trigger: "agent-assessed-significance",
+          evaluationMode: "prefer-independent",
+        },
+      });
+      // biome-ignore lint/performance/noDelete: the point of the test is an absent key.
+      delete (config as Record<string, unknown>).agents;
+    });
+
+    const config = await readConfig(tmp);
+    if (!config) throw new Error("config missing");
+    expect(config.agents).toBeUndefined();
+    expect(resolveAgent(config, "judge").enabled).toBe(true);
+    expect(resolveAgent(config, "judge").trigger).toBe("post-implementation");
+    expect(resolveAgent(config, "comprehension").enabled).toBe(true);
+    expect(resolveAgent(config, "implementer").enabled).toBe(false);
+  });
+
+  it("maps the legacy impl key onto agents.implementer", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { impl: { enabled: true } });
+    });
+
+    expect(resolveAgent((await readConfig(tmp)) as never, "implementer").enabled).toBe(true);
+  });
+
+  it("exposes the resolved implementer configuration in status for canonical and legacy config", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await setConfigValue(tmp, "agents.implementer.enabled", "true");
+    await setConfigValue(tmp, "agents.implementer.trigger", "on-request");
+    await runTask("first capsule", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+    await runTask("second capsule", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+
+    await expect(runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true })).resolves.toMatchObject({
+      enabled: true,
+      trigger: "on-request",
+    });
+
+    await writeRawConfig((config) => {
+      // biome-ignore lint/performance/noDelete: the test verifies legacy fallback when canonical config is absent.
+      delete (config.agents as Record<string, unknown>).implementer;
+      Object.assign(config, { impl: { enabled: true } });
+    });
+    await expect(runImplStatus("TASK-002", { cwd: tmp, nonInteractive: true })).resolves.toMatchObject({
+      enabled: true,
+      trigger: "post-clarification",
+    });
+  });
+
+  it("refuses to start or log implementation when the resolved implementer is disabled", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runTask("disabled implementer", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+
+    const status = await runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(status).toMatchObject({ enabled: false, trigger: "post-clarification", stopped: true });
+    expect(status.blocked).toMatch(/disabled/i);
+
+    const start = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(start).toMatchObject({ refused: true, enabled: false });
+    await expect(runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true })).resolves.toMatchObject({
+      refused: true,
+      enabled: false,
+    });
+  });
+
+  it("does not rewrite a legacy configuration when a read-only command runs", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runTask("read-only commands", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+    const before = await readFile(configPath(), "utf8");
+
+    await runJudgeStatus({ cwd: tmp, nonInteractive: true });
+    await runStatus({ cwd: tmp, nonInteractive: true });
+    await runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true });
+
+    expect(await readFile(configPath(), "utf8")).toBe(before);
+  });
+
+  it("never migrates or deletes legacy keys on upgrade", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runUpgrade({ cwd: tmp, nonInteractive: true });
+
+    const config = await readRawConfig();
+    expect(config.judge).toBeDefined();
+    expect(config.comprehensionGate).toBeDefined();
+  });
+
+  it("resolves a divergence to agents and reports it in doctor", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, {
+        judge: { enabled: false, trigger: "post-implementation" },
+        agents: { judge: { enabled: true } },
+      });
+    });
+
+    const config = await readConfig(tmp);
+    expect(resolveAgent(config as never, "judge").enabled).toBe(true);
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    const divergence = doctor.suggestions.find((suggestion) => suggestion.text.includes("disagree"));
+    expect(divergence?.severity).toBe("warning");
+    expect(divergence?.text).toContain("agents.judge.enabled (true)");
+    expect(divergence?.text).toContain("judge.enabled (false)");
+    expect(divergence?.text).toContain("is in effect (true)");
+  });
+
+  it("keeps the canonical block and the legacy key in step when enable writes", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+
+    const config = await readRawConfig();
+    expect((config.agents as Record<string, { enabled: boolean }>).judge.enabled).toBe(true);
+    // The legacy key is still what an older wep reads. Leaving it contradicting the
+    // canonical value would put every install that ran enable into permanent divergence.
+    expect((config.judge as { enabled: boolean }).enabled).toBe(true);
+    expect(agentWarningTexts((await readConfig(tmp)) as never)).toEqual([]);
+
+    await runJudgeDisable({ cwd: tmp, nonInteractive: true });
+    const disabled = await readRawConfig();
+    expect((disabled.agents as Record<string, { enabled: boolean }>).judge.enabled).toBe(false);
+    expect((disabled.judge as { enabled: boolean }).enabled).toBe(false);
+  });
+
+  it("accepts the agents keys through config set and still accepts the existing ones", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+
+    await setConfigValue(tmp, "agents.judge.enabled", "true");
+    await setConfigValue(tmp, "agents.judge.trigger", "post-review");
+    await setConfigValue(tmp, "agents.judge.model.claude", "claude-opus-5");
+    await setConfigValue(tmp, "agents.comprehension.targets", "claude, codex");
+    await setConfigValue(tmp, "agents.implementer.maxAttempts", "5");
+    const result = await setConfigValue(tmp, "defaultWorkflow", "TDD");
+
+    expect(result.defaults.workflow).toBe("TDD");
+    const config = (await readConfig(tmp)) as never;
+    expect(resolveAgent(config, "judge").model.claude).toBe("claude-opus-5");
+    expect(resolveAgent(config, "judge").trigger).toBe("post-review");
+    expect(resolveAgent(config, "comprehension").targets.sort()).toEqual(["claude", "codex"]);
+    expect(resolveAgent(config, "implementer").maxAttempts).toBe(5);
+  });
+});
+
+// ── models ───────────────────────────────────────────────────────────────────
+
+describe("agent models", () => {
+  it("writes the configured model where each host reads it", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.model.claude", "claude-opus-5");
+    await setConfigValue(tmp, "agents.judge.model.copilot", "gpt-5");
+    await setConfigValue(tmp, "agents.judge.model.codex", "gpt-5-codex");
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+
+    const claude = await readFile(path.join(tmp, ".claude/agents/wep-judge.md"), "utf8");
+    const copilot = await readFile(path.join(tmp, ".github/agents/wep-judge.agent.md"), "utf8");
+    const codex = await readFile(path.join(tmp, ".codex/agents/wep-judge.toml"), "utf8");
+
+    expect(claude.split("---")[1]).toContain("model: claude-opus-5");
+    expect(copilot.split("---")[1]).toContain("model: gpt-5");
+    expect(codex).toContain('model = "gpt-5-codex"');
+  });
+
+  it("regenerates a configured model on upgrade so it survives", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.model.claude", "claude-opus-5");
+
+    await runUpgrade({ cwd: tmp, nonInteractive: true });
+
+    const claude = await readFile(path.join(tmp, ".claude/agents/wep-judge.md"), "utf8");
+    expect(claude).toContain("model: claude-opus-5");
+  });
+
+  it("omits the model field entirely when none is configured", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+
+    const claude = await readFile(path.join(tmp, ".claude/agents/wep-judge.md"), "utf8");
+    const codex = await readFile(path.join(tmp, ".codex/agents/wep-judge.toml"), "utf8");
+    expect(claude.split("---")[1]).not.toContain("model:");
+    expect(codex).not.toContain("model = ");
+    expect(codex).toContain("model_reasoning_effort");
+  });
+
+  it("writes an unfamiliar model literally and warns instead of failing", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.model.claude", "gtp-5-turbo");
+    const enable = await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+
+    const claude = await readFile(path.join(tmp, ".claude/agents/wep-judge.md"), "utf8");
+    expect(claude).toContain("model: gtp-5-turbo");
+    expect(enable.warnings.join("\n")).toContain("gtp-5-turbo");
+    expect(enable.warnings.join("\n")).toContain("does not look like a claude model identifier");
+  });
+
+  it("surfaces the model warning in enable, doctor, and upgrade", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.model.claude", "gtp-5-turbo");
+
+    const enable = await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    expect(enable.warnings.some((text) => text.includes("agents.judge.model.claude"))).toBe(true);
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    expect(
+      doctor.suggestions.some(
+        (suggestion) => suggestion.severity === "warning" && suggestion.text.includes("agents.judge.model.claude"),
+      ),
+    ).toBe(true);
+
+    const upgrade = await runUpgrade({ cwd: tmp, nonInteractive: true });
+    expect(upgrade.warnings.some((text) => text.includes("agents.judge.model.claude"))).toBe(true);
+  });
+
+  it("names the config path in every generated agent file and drops the hand-edit paragraph", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    await runComprehensionEnable({ cwd: tmp, nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+
+    const files: Array<[string, string]> = [
+      [".claude/agents/wep-judge.md", "agents.judge.model.claude"],
+      [".github/agents/wep-judge.agent.md", "agents.judge.model.copilot"],
+      [".codex/agents/wep-judge.toml", "agents.judge.model.codex"],
+      [".claude/agents/wep-comprehension.md", "agents.comprehension.model.claude"],
+      [".codex/agents/wep-implementer.toml", "agents.implementer.model.codex"],
+    ];
+    for (const [relativePath, key] of files) {
+      const content = await readFile(path.join(tmp, relativePath), "utf8");
+      expect(content).toContain(key);
+      expect(content).not.toContain("Setting a specific model");
+      expect(content).not.toContain("add it to the frontmatter of this file");
+    }
+  });
+
+  it("produces no warning for a recognized model", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.model.claude", "claude-opus-5");
+    await setConfigValue(tmp, "agents.judge.model.codex", "o3");
+    await setConfigValue(tmp, "agents.judge.model.copilot", "claude-sonnet-4.5");
+
+    expect(agentWarningTexts((await readConfig(tmp)) as never)).toEqual([]);
+  });
+});
+
+// ── triggers ─────────────────────────────────────────────────────────────────
+
+describe("agent triggers", () => {
+  it("renders distinct on-request and post-clarification handoff rules with human confirmation", () => {
+    for (const target of ["codex", "claude", "copilot"] as const) {
+      const content = mainInstructionTemplate(target);
+      expect(content).toContain("wep impl status TASK-XXX --json");
+      expect(content).toContain("on-request");
+      expect(content).toContain("post-clarification");
+      expect(content).toMatch(/Never delegate automatically/i);
+      expect(content).toMatch(/explicit human confirmation/i);
+    }
+  });
+
+  it("propagates an unrecognized trigger with a warning", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.trigger", "before-lunch");
+
+    const config = (await readConfig(tmp)) as never;
+    expect(resolveAgent(config, "judge").trigger).toBe("before-lunch");
+    expect(agentWarningTexts(config).join("\n")).toContain("wep does not recognize");
+
+    const status = await runStatus({ cwd: tmp, nonInteractive: true });
+    expect(status.agents.find((agent) => agent.name === "judge")?.trigger).toBe("before-lunch");
+    expect(status.warnings.join("\n")).toContain("before-lunch");
+  });
+
+  it("produces no warning for a recognized trigger", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.trigger", "post-implementation");
+
+    expect(agentWarningTexts((await readConfig(tmp)) as never)).toEqual([]);
+  });
+
+  it("never rejects a judge scope because of the configured trigger", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.trigger", "whenever-it-feels-right");
+    const task = await runTask("configurable trigger", { cwd: tmp, nonInteractive: true });
+    await commitBase();
+
+    const scope = await createJudgeScope(tmp, task.taskId, "HEAD", "WORKTREE");
+    expect(scope.taskId).toBe(task.taskId);
+  });
+});
+
+// ── targets ──────────────────────────────────────────────────────────────────
+
+describe("agent targets", () => {
+  it("narrows emission to the listed targets", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await rm(path.join(tmp, ".claude/agents"), { recursive: true, force: true });
+    await rm(path.join(tmp, ".codex/agents"), { recursive: true, force: true });
+    await rm(path.join(tmp, ".github/agents"), { recursive: true, force: true });
+    await setConfigValue(tmp, "agents.judge.targets", "claude");
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+
+    expect(await pathExists(path.join(tmp, ".claude/agents/wep-judge.md"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".codex/agents/wep-judge.toml"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".github/agents/wep-judge.agent.md"))).toBe(false);
+  });
+
+  it("skips an uninstalled target with a warning rather than failing", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { judge: { targets: ["claude", "codex"] } } });
+    });
+
+    const result = await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    expect(result.installedTargets).toEqual(["claude"]);
+    expect(await pathExists(path.join(tmp, ".codex/agents/wep-judge.toml"))).toBe(false);
+    expect(result.warnings.join("\n")).toContain("codex, which is not installed");
+  });
+
+  it("skips pi with a warning and states the limitation in doctor", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { judge: { enabled: true, targets: ["claude", "pi"] } } });
+    });
+
+    const result = await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    expect(result.warnings.join("\n")).toContain("pi, which has no agent format");
+    expect(await pathExists(path.join(tmp, ".pi/agents/wep-judge.md"))).toBe(false);
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    expect(doctor.suggestions.some((suggestion) => suggestion.text.includes("pi"))).toBe(true);
+  });
+
+  it("never widens emission beyond the installed targets", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { comprehension: { enabled: true, targets: ["claude", "copilot"] } } });
+    });
+
+    await runUpgrade({ cwd: tmp, nonInteractive: true });
+    expect(await pathExists(path.join(tmp, ".github/agents/wep-comprehension.agent.md"))).toBe(false);
+  });
+});
+
+// ── attempt budget ───────────────────────────────────────────────────────────
+
+describe("attempt budget", () => {
+  it("defaults to three", () => {
+    const config = normalizeConfig({ targets: ["codex"] });
+    expect(resolveAgent(config, "implementer").maxAttempts).toBe(3);
+  });
+
+  it("rejects a budget that would otherwise resolve to no limit", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    for (const value of ["zero", 0, -1, 2.5]) {
+      await writeRawConfig((config) => {
+        Object.assign(config, { agents: { implementer: { maxAttempts: value } } });
+      });
+      await expect(readConfig(tmp)).rejects.toThrow(/maxAttempts must be a positive integer/);
+    }
+  });
+});
+
+// ── doctor ───────────────────────────────────────────────────────────────────
+
+describe("doctor agent gaps", () => {
+  it("fires for a legacy-only config with the feature enabled and files missing", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await rm(path.join(tmp, ".codex/agents/wep-judge.toml"), { force: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { judge: { enabled: true, trigger: "post-implementation" } });
+    });
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    expect(doctor.suggestions.some((suggestion) => suggestion.text.includes("wep judge enable"))).toBe(true);
+  });
+
+  it("fires for an agents-only config the raw legacy check would have missed", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await rm(path.join(tmp, ".codex/agents/wep-judge.toml"), { force: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, {
+        judge: { enabled: false, trigger: "post-implementation" },
+        agents: { judge: { enabled: true } },
+      });
+    });
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    expect(doctor.suggestions.some((suggestion) => suggestion.text.includes("wep judge enable"))).toBe(true);
+  });
+
+  it("names an unknown agent entry once, as a warning", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { reviewr: { enabled: true } } });
+    });
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    const named = doctor.suggestions.filter((suggestion) => suggestion.text.includes("agents.reviewr"));
+    expect(named).toHaveLength(1);
+    expect(named[0].severity).toBe("warning");
+    expect(doctor.missing.some((gap) => gap.includes("reviewr"))).toBe(false);
+  });
+
+  it("reports the unknown entry through status and upgrade too", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { reviewr: { enabled: true } } });
+    });
+
+    expect((await runStatus({ cwd: tmp })).warnings.some((text) => text.includes("agents.reviewr"))).toBe(true);
+    const upgrade = await runUpgrade({ cwd: tmp, nonInteractive: true });
+    expect(upgrade.warnings.some((text) => text.includes("agents.reviewr"))).toBe(true);
+  });
+
+  it("reports no agent gap or warning on a fresh install", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    expect(doctor.suggestions.filter((suggestion) => suggestion.text.includes("agents."))).toEqual([]);
+    expect(doctor.suggestions.filter((suggestion) => suggestion.severity === "warning")).toEqual([]);
+  });
+});
+
+// ── implementer agent and implementation log ─────────────────────────────────
+
+const round = (overrides: Partial<Parameters<typeof runImplLog>[1]> = {}) => ({
+  criteria: ["AC-1"],
+  files: ["src/a.ts"],
+  validation: [{ command: "pnpm test", status: "passed" as const, output: "602 passed" }],
+  ...overrides,
+});
+
+const tddRound = (overrides: Partial<Parameters<typeof runImplLog>[1]> = {}) =>
+  round({
+    validation: [
+      {
+        command: "pnpm vitest run tests/regression.test.ts",
+        status: "failed" as const,
+        output: "expected 2 to be 3",
+        phase: "red" as const,
+        expectedFailure: "expected 2 to be 3",
+      },
+      {
+        command: "pnpm vitest run tests/regression.test.ts",
+        status: "passed" as const,
+        output: "1 passed",
+        phase: "green" as const,
+      },
+    ],
+    ...overrides,
+  });
+
+describe("wep impl", () => {
+  beforeEach(async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    // `impl` resolves its argument against a capsule, so TASK-001 must exist.
+    await runTask("implementation rounds", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+  });
+
+  it("creates the log, reports round 1, and reports round 3 after two rounds", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+
+    const first = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(first.round).toBe(1);
+    expect(await pathExists(path.join(tmp, implLogPath("TASK-001")))).toBe(true);
+
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+
+    expect((await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true })).round).toBe(3);
+  });
+
+  it("refuses to start a fourth round and reports the task as stopped", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    for (let index = 0; index < 3; index += 1) {
+      await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    }
+
+    const start = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(start.refused).toBe(true);
+    expect(start.round).toBeUndefined();
+    expect(start.stopped).toBe(true);
+    expect(start.reason).toContain("Attempt budget spent");
+  });
+
+  it("appends without rewriting earlier records", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplLog("TASK-001", round({ blocker: "first blocker" }), { cwd: tmp, nonInteractive: true });
+    const afterFirst = await readFile(path.join(tmp, implLogPath("TASK-001")), "utf8");
+
+    await runImplLog("TASK-001", round({ blocker: "second blocker" }), { cwd: tmp, nonInteractive: true });
+    const afterSecond = await readFile(path.join(tmp, implLogPath("TASK-001")), "utf8");
+
+    expect(afterSecond.startsWith(afterFirst)).toBe(true);
+  });
+
+  it("enforces the budget in log even when start was never called", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    for (let index = 0; index < 3; index += 1) {
+      await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    }
+
+    const fourth = await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    expect(fourth.refused).toBe(true);
+    expect(fourth.record).toBeUndefined();
+    expect(parseLog(await readFile(path.join(tmp, implLogPath("TASK-001")), "utf8"))).toHaveLength(3);
+  });
+
+  it("derives the round at append time, so two starts cannot disagree", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    const first = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+    const second = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(first.round).toBe(second.round);
+
+    const logged = await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    expect(logged.record?.round).toBe(first.round);
+    expect(parseLog(await readFile(path.join(tmp, implLogPath("TASK-001")), "utf8"))).toHaveLength(1);
+  });
+
+  it("round-trips every field of a record", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    const input = {
+      criteria: ["AC-1", "AC-4"],
+      files: ["src/a.ts", "tests/a.test.ts"],
+      validation: [
+        { command: "pnpm test", status: "failed" as const, output: "1 failed | 601 passed\nexit code 1" },
+        { command: "pnpm lint", status: "not-run" as const, output: "skipped: tests failed first" },
+      ],
+      blocker: "The criterion contradicts the contract in task.md.",
+      decisionNeeded: "Which of the two readings applies?",
+      timestamp: "2026-08-06T10:00:00.000Z",
+    };
+
+    const result = await runImplLog("TASK-001", input, { cwd: tmp, nonInteractive: true });
+    const [parsed] = parseLog(await readFile(path.join(tmp, implLogPath("TASK-001")), "utf8"));
+
+    expect(parsed).toEqual({ round: 1, ...input });
+    expect(result.record).toEqual(parsed);
+  });
+
+  it("derives the attempt count from the records, not from the caller", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+
+    // A caller claiming round 1 does not lower the count.
+    const claimed = await runImplLog("TASK-001", { ...round(), round: 1 } as never, { cwd: tmp, nonInteractive: true });
+    expect(claimed.record?.round).toBe(3);
+    expect((await runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true })).attemptsUsed).toBe(3);
+  });
+
+  it("exposes attempts, stopped state, and the last blocker in status", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplLog("TASK-001", round({ blocker: "waiting on a decision" }), { cwd: tmp, nonInteractive: true });
+
+    const status = await runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(status).toMatchObject({
+      attemptsUsed: 1,
+      attemptsRemaining: 2,
+      maxAttempts: 3,
+      stopped: false,
+      lastBlocker: "waiting on a decision",
+      readable: true,
+    });
+  });
+
+  it("reports a truncated log as unreadable rather than as zero attempts", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    const logFile = path.join(tmp, implLogPath("TASK-001"));
+    await writeFile(logFile, `${(await readFile(logFile, "utf8")).split("```json")[0]}\n`, "utf8");
+
+    const status = await runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(status.readable).toBe(false);
+    // Not 0: a consumer reading a count from an untrustworthy log would conclude no attempt
+    // was ever made, which is exactly what this case exists to prevent.
+    expect(status.attemptsUsed).toBeNull();
+    expect(status.attemptsRemaining).toBe(0);
+    expect(status.stopped).toBe(true);
+
+    const start = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(start.refused).toBe(true);
+    expect(start.reason).toContain("unreadable");
+  });
+
+  it("honours a configured attempt budget", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await setConfigValue(tmp, "agents.implementer.maxAttempts", "1");
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+
+    const second = await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    expect(second.refused).toBe(true);
+  });
+
+  it("keeps the implementation log out of the review boundary and off taskDigest", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    const task = await runTask("digest invariance", { cwd: tmp, nonInteractive: true });
+    await commitBase();
+
+    const before = await createJudgeScope(tmp, task.taskId, "HEAD", "WORKTREE");
+    await runImplLog(task.taskId, round(), { cwd: tmp, nonInteractive: true });
+    const after = await createJudgeScope(tmp, task.taskId, "HEAD", "WORKTREE");
+
+    expect(after.taskDigest).toBe(before.taskDigest);
+    expect(after.changeDigest).toBe(before.changeDigest);
+    expect(after.scopeDigest).toBe(before.scopeDigest);
+    expect(after.changedFiles).not.toContain(implLogPath(task.taskId));
+    expect(capsuleFiles).toHaveLength(5);
+  });
+
+  it.each(["TDD", "SDD+TDD", "TDD+EDD"] as const)(
+    "requires ordered red-to-green evidence from plan.md for %s",
+    async (workflow) => {
+      const task = await runTask("preserve tdd evidence", { cwd: tmp, workflow, nonInteractive: true });
+      await writeFile(path.join(tmp, task.taskDir, "task.md"), "# Task\n\n## Recommended Workflow\n\nSDD\n", "utf8");
+
+      const logged = await runImplLog(task.taskId, tddRound(), { cwd: tmp, nonInteractive: true });
+      expect(logged.tddEvidence).toMatchObject({ required: true, status: "complete" });
+      expect((await runImplStatus(task.taskId, { cwd: tmp, nonInteractive: true })).blocked).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["missing red", [{ command: "pnpm test", status: "passed", output: "ok", phase: "green" }]],
+    [
+      "wrong red reason",
+      [
+        { command: "pnpm test", status: "failed", output: "timeout", phase: "red", expectedFailure: "assertion" },
+        { command: "pnpm test", status: "passed", output: "ok", phase: "green" },
+      ],
+    ],
+    [
+      "missing green",
+      [{ command: "pnpm test", status: "failed", output: "assertion", phase: "red", expectedFailure: "assertion" }],
+    ],
+  ])("blocks a TDD round with %s evidence", async (_label, validation) => {
+    const task = await runTask("tdd evidence failure", { cwd: tmp, workflow: "TDD", nonInteractive: true });
+    const logged = await runImplLog(task.taskId, round({ validation: validation as never }), {
+      cwd: tmp,
+      nonInteractive: true,
+    });
+
+    expect(logged.tddEvidence).toMatchObject({ required: true, status: "invalid" });
+    expect(logged.blocked).toMatch(/TDD red→green evidence/);
+    expect(logged.refused).toBe(true);
+    expect(logged.record).toBeUndefined();
+    expect(await pathExists(path.join(tmp, implLogPath(task.taskId)))).toBe(false);
+  });
+
+  it("accepts the same command after whitespace normalization", async () => {
+    const task = await runTask("normalized tdd evidence", { cwd: tmp, workflow: "TDD", nonInteractive: true });
+    const evidence = tddRound().validation;
+    const logged = await runImplLog(
+      task.taskId,
+      tddRound({
+        validation: [evidence[0], { ...evidence[1], command: "  pnpm   vitest run tests/regression.test.ts  " }],
+      }),
+      { cwd: tmp, nonInteractive: true },
+    );
+    expect(logged.tddEvidence.status).toBe("complete");
+  });
+
+  it("does not invent evidence for legacy or non-TDD records", async () => {
+    // A capsule with no readable workflow stands for a log written before the contract.
+    const legacyTask = await runTask("legacy capsule", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+    await rm(path.join(tmp, legacyTask.taskDir, "plan.md"));
+    const legacy = await runImplLog(legacyTask.taskId, round(), { cwd: tmp, nonInteractive: true });
+    expect(legacy.tddEvidence).toMatchObject({ required: false, status: "not-required" });
+
+    const task = await runTask("non tdd work", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+    const logged = await runImplLog(task.taskId, round(), { cwd: tmp, nonInteractive: true });
+    expect(logged.tddEvidence).toMatchObject({ required: false, status: "not-required" });
+  });
+
+  it("lets a TDD task with a legacy phase-less record advance with a compliant round", async () => {
+    const task = await runTask("legacy tdd continuation", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+    const legacy = await runImplLog(task.taskId, round(), { cwd: tmp, nonInteractive: true });
+    expect(legacy.refused).toBe(false);
+
+    const planPath = path.join(tmp, task.taskDir, "plan.md");
+    const plan = await readFile(planPath, "utf8");
+    await writeFile(planPath, plan.replace(/(## Workflow\n\n)-?\s*[^\n]+/, "$1- TDD"), "utf8");
+
+    const status = await runImplStatus(task.taskId, { cwd: tmp, nonInteractive: true });
+    expect(status.tddEvidence).toMatchObject({ required: true, status: "missing" });
+    expect(status.blocked).toBeUndefined();
+
+    const current = await runImplLog(task.taskId, tddRound(), { cwd: tmp, nonInteractive: true });
+    expect(current.refused).toBe(false);
+    expect(current.record?.round).toBe(2);
+    expect(current.tddEvidence).toMatchObject({ required: true, status: "complete" });
+  });
+});
+
+describe("implementer agent files", () => {
+  it("writes the three host formats and records the intent", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+
+    for (const relativePath of [
+      ".claude/agents/wep-implementer.md",
+      ".github/agents/wep-implementer.agent.md",
+      ".codex/agents/wep-implementer.toml",
+    ]) {
+      expect(await pathExists(path.join(tmp, relativePath))).toBe(true);
+    }
+    expect(resolveAgent((await readConfig(tmp)) as never, "implementer").enabled).toBe(true);
+  });
+
+  it("writes no implementer file on init alone, and treats an absent key as off", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+
+    expect(await pathExists(path.join(tmp, ".claude/agents/wep-implementer.md"))).toBe(false);
+    const config = await readRawConfig();
+    expect(config.impl).toBeUndefined();
+    expect(resolveAgent((await readConfig(tmp)) as never, "implementer").enabled).toBe(false);
+  });
+
+  it("regenerates on upgrade only when enabled", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await runUpgrade({ cwd: tmp, nonInteractive: true });
+    expect(await pathExists(path.join(tmp, ".claude/agents/wep-implementer.md"))).toBe(false);
+
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    await rm(path.join(tmp, ".claude/agents/wep-implementer.md"));
+    await runUpgrade({ cwd: tmp, nonInteractive: true });
+    expect(await pathExists(path.join(tmp, ".claude/agents/wep-implementer.md"))).toBe(true);
+  });
+
+  it("carries identical substance across the three host formats", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+
+    const claims = [
+      "acceptance-criteria.md",
+      "wep impl start",
+      "wep impl log",
+      "Never write any of the five capsule files",
+      "protected instruction files",
+      "cannot enforce",
+      "declared workflow",
+    ];
+    for (const relativePath of [
+      ".claude/agents/wep-implementer.md",
+      ".github/agents/wep-implementer.agent.md",
+      ".codex/agents/wep-implementer.toml",
+    ]) {
+      const content = await readFile(path.join(tmp, relativePath), "utf8");
+      for (const claim of claims) expect(content).toContain(claim);
+    }
+  });
+
+  it("reports a doctor gap when enabled with the agent files missing", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    await rm(path.join(tmp, ".claude/agents/wep-implementer.md"));
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    expect(doctor.suggestions.some((suggestion) => suggestion.text.includes("wep impl enable"))).toBe(true);
+    expect(doctor.missing).not.toContain(".claude/agents/wep-implementer.md");
+  });
+});
+
+describe("claude agent discovery notice", () => {
+  it("warns on the enable that creates .claude/agents/, and stays silent afterwards", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await rm(path.join(tmp, ".claude/agents"), { recursive: true, force: true });
+    expect(await pathExists(path.join(tmp, ".claude/agents"))).toBe(false);
+
+    const first = await runImplEnable({ cwd: tmp, nonInteractive: true });
+    expect(first.discoveryNotice).toMatch(/did not exist when the session started/);
+    expect(first.discoveryNotice).toContain("wep-implementer");
+
+    // The directory exists now, so Claude Code's watcher already covers it.
+    expect((await runImplEnable({ cwd: tmp, nonInteractive: true })).discoveryNotice).toBeUndefined();
+    expect((await runJudgeEnable({ cwd: tmp, nonInteractive: true })).discoveryNotice).toBeUndefined();
+  });
+
+  it("stays silent on a dry run, which creates no directory to be undiscovered", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await rm(path.join(tmp, ".claude/agents"), { recursive: true, force: true });
+
+    const dry = await runImplEnable({ cwd: tmp, dryRun: true, nonInteractive: true });
+    expect(dry.discoveryNotice).toBeUndefined();
+    expect(await pathExists(path.join(tmp, ".claude/agents"))).toBe(false);
+
+    // The real run still reports it, so the dry run loses no information.
+    expect((await runImplEnable({ cwd: tmp, nonInteractive: true })).discoveryNotice).toBeDefined();
+  });
+
+  it("stays silent for a target that is not Claude Code", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+
+    expect((await runImplEnable({ cwd: tmp, nonInteractive: true })).discoveryNotice).toBeUndefined();
+  });
+
+  it("warns on judge enable and on comprehension enable too", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await rm(path.join(tmp, ".claude/agents"), { recursive: true, force: true });
+
+    const judge = await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    expect(judge.discoveryNotice).toContain("wep-judge");
+
+    await rm(path.join(tmp, ".claude/agents"), { recursive: true });
+    const comprehension = await runComprehensionEnable({ cwd: tmp, nonInteractive: true });
+    expect(comprehension.discoveryNotice).toContain("wep-comprehension");
+  });
+});
+
+// ── implementation log privacy ───────────────────────────────────────────────
+
+describe("implementation log privacy", () => {
+  const localIgnore = () => path.join(tmp, ".wep/local/.gitignore");
+
+  beforeEach(async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    // `impl` resolves its argument against a capsule, so TASK-001 must exist.
+    await runTask("log privacy", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+  });
+
+  it("is satisfied by a fresh install with no extra step", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await expect(runImplEnable({ cwd: tmp, nonInteractive: true })).resolves.toBeTruthy();
+    expect((await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true })).refused).toBe(false);
+  });
+
+  it("refuses to enable the implementer when the local ignore is missing", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await rm(localIgnore());
+
+    await expect(runImplEnable({ cwd: tmp, nonInteractive: true })).rejects.toThrow(/wep doctor --fix/);
+    expect(await pathExists(path.join(tmp, ".codex/agents/wep-implementer.toml"))).toBe(false);
+    expect(resolveAgent((await readConfig(tmp)) as never, "implementer").enabled).toBe(false);
+  });
+
+  it("refuses to enable the implementer when the local ignore no longer excludes the log", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeFile(localIgnore(), "comprehension/\n", "utf8");
+
+    await expect(runImplEnable({ cwd: tmp, nonInteractive: true })).rejects.toThrow(/wep doctor --fix/);
+  });
+
+  it("refuses to open a log the review boundary would pick up", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await rm(localIgnore());
+
+    const started = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(started.refused).toBe(true);
+    expect(started.reason).toMatch(/no longer ignores/);
+    expect(await pathExists(path.join(tmp, implLogPath("TASK-001")))).toBe(false);
+  });
+
+  it("refuses to append to a log the review boundary would pick up", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    await rm(localIgnore());
+
+    const logged = await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    expect(logged.refused).toBe(true);
+    expect(logged.record).toBeUndefined();
+    expect(parseLog(await readFile(path.join(tmp, implLogPath("TASK-001")), "utf8"))).toHaveLength(1);
+  });
+
+  it("does not present the task as open while the log is exposed", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    await rm(localIgnore());
+
+    const status = await runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true });
+    expect(status.stopped).toBe(true);
+    expect(status.attemptsRemaining).toBe(0);
+    expect(status.error).toMatch(/no longer ignores/);
+  });
+});
+
+// ── record validation ────────────────────────────────────────────────────────
+
+describe("impl log record validation", () => {
+  const valid = {
+    criteria: ["AC-1"],
+    files: ["src/a.ts"],
+    validation: [{ command: "pnpm test", status: "passed", output: "648 passed" }],
+  };
+
+  it("accepts a well-formed record", () => {
+    expect(parseRecordInput(valid)).toMatchObject(valid);
+  });
+
+  it("accepts explicit TDD evidence fields while keeping them optional for legacy records", () => {
+    const parsed = parseRecordInput(tddRound());
+    expect(parsed.validation[0]).toMatchObject({ phase: "red", expectedFailure: "expected 2 to be 3" });
+    expect(parsed.validation[1]).toMatchObject({ phase: "green" });
+    expect(parseRecordInput(valid)).toMatchObject(valid);
+  });
+
+  it("names the offending field instead of accepting it", () => {
+    const cases: Array<[unknown, RegExp]> = [
+      [{ ...valid, criteria: "AC-1" }, /criteria/],
+      [{ ...valid, files: [1, 2] }, /files/],
+      [{ ...valid, validation: "pnpm test" }, /validation/],
+      [{ ...valid, validation: [{ status: "passed", output: "" }] }, /command/],
+      [{ ...valid, validation: [{ command: "pnpm test", status: "green", output: "" }] }, /status/],
+      [{ ...valid, validation: [{ command: "pnpm test", status: "passed", output: 12 }] }, /output/],
+      [{ ...valid, blocker: 7 }, /blocker/],
+      [{ ...valid, timestamp: "yesterday" }, /timestamp/],
+      [{ ...valid, critera: ["AC-1"] }, /critera/],
+      ["not a record", /object/],
+    ];
+    for (const [record, expected] of cases) {
+      expect(() => parseRecordInput(record), JSON.stringify(record)).toThrow(expected);
+    }
+  });
+
+  it("accepts an ISO timestamp and drops a supplied round", () => {
+    const parsed = parseRecordInput({ ...valid, timestamp: "2026-08-07T09:00:00.000Z", round: 9 });
+    expect(parsed.timestamp).toBe("2026-08-07T09:00:00.000Z");
+    expect(parsed).not.toHaveProperty("round");
+  });
+
+  it("reaches the store through the CLI, so a bad record is never appended", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    const file = path.join(tmp, "record.json");
+    await writeFile(file, JSON.stringify({ ...valid, criteria: "AC-1" }), "utf8");
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tmp);
+      await expect(main(["node", "wep", "impl", "log", "TASK-001", "--record", file])).rejects.toThrow(/criteria/);
+    } finally {
+      process.chdir(previousCwd);
+    }
+    expect(await pathExists(path.join(tmp, implLogPath("TASK-001")))).toBe(false);
+  });
+});
+
+// ── enable guards ────────────────────────────────────────────────────────────
+
+describe("enable guards", () => {
+  it("refuses to enable the judge when no installed target has a judge format", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await rm(path.join(tmp, ".codex/agents/wep-judge.toml"), { force: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, {
+        judge: { enabled: false, trigger: "post-implementation" },
+        agents: { judge: { enabled: false, targets: ["pi"] } },
+      });
+    });
+
+    await expect(runJudgeEnable({ cwd: tmp, nonInteractive: true })).rejects.toThrow(/judge/i);
+    expect(await pathExists(path.join(tmp, ".codex/agents/wep-judge.toml"))).toBe(false);
+    expect(resolveAgent((await readConfig(tmp)) as never, "judge").enabled).toBe(false);
+  });
+
+  it("still enables the judge for a resolvable target", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    const result = await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    expect(result.installedTargets).toEqual(["codex"]);
+    expect(await pathExists(path.join(tmp, ".codex/agents/wep-judge.toml"))).toBe(true);
+  });
+});
+
+// ── regeneration and write reporting ─────────────────────────────────────────
+
+describe("agent file regeneration", () => {
+  /** The sequence from manual QA: enable, notice the model is missing, set it, enable again. */
+  it("applies a model set after the agent file already exists", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    const file = path.join(tmp, ".github/agents/wep-implementer.agent.md");
+
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    expect(await readFile(file, "utf8")).not.toContain("model:");
+
+    await setConfigValue(tmp, "agents.implementer.model.copilot", "Claude Opus 4.5", false);
+    const again = await runImplEnable({ cwd: tmp, nonInteractive: true });
+
+    const content = await readFile(file, "utf8");
+    expect(content).toContain('model: "Claude Opus 4.5"');
+    expect(again.writes.find((write) => write.path.endsWith("wep-implementer.agent.md"))?.kind).toBe("update");
+  });
+
+  it("applies a model set after the fact for the judge and the comprehension agent", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.model.copilot", "GPT-5.2", false);
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    expect(await readFile(path.join(tmp, ".github/agents/wep-judge.agent.md"), "utf8")).toContain("model: GPT-5.2");
+
+    await runComprehensionEnable({ cwd: tmp, nonInteractive: true });
+    await setConfigValue(tmp, "agents.comprehension.model.copilot", "GPT-5.2", false);
+    await runComprehensionEnable({ cwd: tmp, nonInteractive: true });
+    expect(await readFile(path.join(tmp, ".github/agents/wep-comprehension.agent.md"), "utf8")).toContain(
+      "model: GPT-5.2",
+    );
+  });
+
+  it("reports an unchanged re-enable as preserved and rewrites nothing", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    const file = path.join(tmp, ".github/agents/wep-implementer.agent.md");
+
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    const before = await readFile(file, "utf8");
+
+    const again = await runImplEnable({ cwd: tmp, nonInteractive: true });
+    expect(again.writes.find((write) => write.path.endsWith("wep-implementer.agent.md"))?.kind).toBe("preserve");
+    expect(await readFile(file, "utf8")).toBe(before);
+  });
+
+  it("writes nothing on a dry run even though it regenerates", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    await setConfigValue(tmp, "agents.implementer.model.copilot", "GPT-5.2", false);
+
+    await runImplEnable({ cwd: tmp, nonInteractive: true, dryRun: true });
+    expect(await readFile(path.join(tmp, ".github/agents/wep-implementer.agent.md"), "utf8")).not.toContain("model:");
+  });
+
+  it("still protects a protected instruction file", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    const instructions = path.join(tmp, ".github/copilot-instructions.md");
+    await writeFile(instructions, "# Mine\n", "utf8");
+
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true, force: true });
+    expect(await readFile(instructions, "utf8")).toBe("# Mine\n");
+  });
+});
+
+describe("write reporting", () => {
+  async function capture(run: () => Promise<unknown>): Promise<string> {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (message?: unknown) => {
+      lines.push(String(message));
+    };
+    try {
+      await run();
+    } finally {
+      console.log = original;
+    }
+    return lines.join("\n");
+  }
+
+  it("does not render a preserved file with the creation marker", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    const previousCwd = process.cwd();
+
+    const output = await capture(async () => {
+      try {
+        process.chdir(tmp);
+        await main(["node", "wep", "impl", "enable"]);
+        await main(["node", "wep", "impl", "enable"]);
+      } finally {
+        process.chdir(previousCwd);
+      }
+    });
+
+    const preserved = output
+      .split("\n")
+      .filter((line) => line.includes("wep-implementer.agent.md"))
+      .at(-1);
+    expect(preserved).toBeDefined();
+    expect(preserved).not.toContain("+");
+    expect(preserved).toContain("=");
+  });
+});
+
+// ── repeat init ──────────────────────────────────────────────────────────────
+
+describe("init target accumulation", () => {
+  it("adds a second target instead of ignoring it", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+
+    const config = await readConfig(tmp);
+    expect(config?.targets).toEqual(["copilot", "claude"]);
+
+    const enable = await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    expect(enable.installedTargets).toEqual(["copilot", "claude"]);
+    expect(await pathExists(path.join(tmp, ".claude/agents/wep-judge.md"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".github/agents/wep-judge.agent.md"))).toBe(true);
+    expect(enable.warnings.join("\n")).not.toContain("not installed");
+  });
+
+  it("does not duplicate a target already listed", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+
+    expect((await readConfig(tmp))?.targets).toEqual(["copilot"]);
+  });
+
+  it("never shortens the target list", async () => {
+    await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+
+    expect((await readConfig(tmp))?.targets).toEqual([...targetNames]);
+  });
+
+  it("keeps the first install's default target and the user's own settings", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await setConfigValue(tmp, "defaults.workflow", "TDD", false);
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { reviewr: { enabled: true, depth: 3 } } });
+    });
+
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+
+    const config = await readConfig(tmp);
+    expect(config?.defaults.target).toBe("copilot");
+    expect(config?.defaults.workflow).toBe("TDD");
+    expect(config?.profile).toBe("default");
+    expect((await readRawConfig()).agents).toMatchObject({ reviewr: { enabled: true, depth: 3 } });
+  });
+
+  it("leaves doctor and the resolved config agreeing", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+
+    const doctor = await runDoctor({ cwd: tmp, nonInteractive: true });
+    const config = await readConfig(tmp);
+    expect([...doctor.installedTargets].sort()).toEqual([...(config?.targets ?? [])].sort());
+    expect(agentWarningTexts(config as never).join("\n")).not.toContain("not installed");
+  });
+
+  it("writes nothing on a dry run", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true, dryRun: true });
+
+    expect((await readConfig(tmp))?.targets).toEqual(["copilot"]);
+  });
+
+  it("survives doctor --fix, which re-runs init per detected target", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+
+    await runDoctor({ cwd: tmp, nonInteractive: true, fix: true });
+    expect([...((await readConfig(tmp))?.targets ?? [])].sort()).toEqual(["claude", "copilot"]);
+  });
+
+  it("warns when a new target is narrowed out by an enabled agent's explicit targets", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.targets", "copilot", false);
+
+    const result = await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    expect(result.agentTargetWarnings.some((w) => w.includes("agents.judge") && w.includes("claude"))).toBe(true);
+    expect((await readConfig(tmp))?.targets).toEqual(["copilot", "claude"]);
+  });
+
+  it("does not warn when the agent has no explicit targets list", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+
+    const result = await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    expect(result.agentTargetWarnings).toEqual([]);
+  });
+
+  it("does not warn when the explicit targets list already covers the new target", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.targets", "copilot, claude", false);
+
+    const result = await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    expect(result.agentTargetWarnings).toEqual([]);
+  });
+
+  it("does not warn for a disabled agent even if its targets list omits the new target", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await writeRawConfig((config) => {
+      Object.assign(config, { agents: { judge: { enabled: false, targets: ["copilot"] } } });
+    });
+
+    const result = await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    expect(result.agentTargetWarnings).toEqual([]);
+  });
+
+  it("warns per uncovered target on `--target all` when an agent is pinned", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.targets", "copilot", false);
+
+    const result = await runInit({ cwd: tmp, target: "all", nonInteractive: true });
+    expect(result.agentTargetWarnings.some((w) => w.includes("agents.judge") && w.includes("claude"))).toBe(true);
+    expect(result.agentTargetWarnings.some((w) => w.includes("agents.judge") && w.includes("codex"))).toBe(true);
+    expect(result.agentTargetWarnings.some((w) => w.includes('newly added target "copilot"'))).toBe(false);
+  });
+
+  it("does not warn when re-running init for a target that is already installed", async () => {
+    await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    await setConfigValue(tmp, "agents.judge.targets", "codex", false);
+
+    const result = await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    expect(result.agentTargetWarnings).toEqual([]);
+  });
+
+  it("produces no narrowing warning on a first install", async () => {
+    const result = await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    expect(result.agentTargetWarnings).toEqual([]);
+  });
+});
+
+// ── task ID resolution ───────────────────────────────────────────────────────
+
+describe("impl task ID resolution", () => {
+  let dirName = "";
+  const shortLog = () => path.join(tmp, ".wep/local/impl/TASK-001/log.md");
+  const slugLog = () => path.join(tmp, `.wep/local/impl/${dirName}/log.md`);
+
+  async function capsule(): Promise<string> {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await runImplEnable({ cwd: tmp, nonInteractive: true });
+    const task = await runTask("resolve identifiers", { cwd: tmp, workflow: "SDD", nonInteractive: true });
+    dirName = path.basename(task.taskDir);
+    return dirName;
+  }
+
+  /** Recreate a log written before the path used the short task ID. */
+  async function writeSlugLog(): Promise<void> {
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    await mkdir(path.dirname(slugLog()), { recursive: true });
+    await rename(shortLog(), slugLog());
+  }
+
+  it("shares one log between the short ID and the capsule directory name", async () => {
+    const dirName = await capsule();
+
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    const status = await runImplStatus(dirName, { cwd: tmp, nonInteractive: true });
+
+    expect(status.taskId).toBe("TASK-001");
+    expect(status.logPath).toBe(".wep/local/impl/TASK-001/log.md");
+    expect(status.attemptsUsed).toBe(1);
+    expect(await pathExists(slugLog())).toBe(false);
+  });
+
+  it("shares the attempt budget between both forms", async () => {
+    const dirName = await capsule();
+
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    await runImplLog(dirName, round(), { cwd: tmp, nonInteractive: true });
+    const start = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+
+    expect(start.attemptsUsed).toBe(2);
+    expect(start.round).toBe(3);
+    expect(parseLog(await readFile(shortLog(), "utf8"))).toHaveLength(2);
+  });
+
+  it("writes the resolved short ID into the log header", async () => {
+    const dirName = await capsule();
+
+    await runImplStart(dirName, { cwd: tmp, nonInteractive: true });
+
+    expect(await readFile(shortLog(), "utf8")).toContain("# Implementation Log — TASK-001");
+  });
+
+  it.each([
+    ["a wrong slug", "TASK-001-wrong-slug"],
+    ["an unpadded number", "TASK-1"],
+    ["an ID with no capsule", "TASK-999"],
+  ])("refuses %s", async (_label, taskId) => {
+    await capsule();
+
+    await expect(runImplStart(taskId, { cwd: tmp, nonInteractive: true })).rejects.toThrow(/no task capsule/i);
+    await expect(runImplStatus(taskId, { cwd: tmp, nonInteractive: true })).rejects.toThrow(/no task capsule/i);
+    await expect(runImplLog(taskId, round(), { cwd: tmp, nonInteractive: true })).rejects.toThrow(/no task capsule/i);
+  });
+
+  it("refuses a traversal argument and writes nothing outside the local store", async () => {
+    await capsule();
+    const outside = path.join(tmp, "..", "wep-pwn");
+
+    await expect(runImplStart("../../wep-pwn", { cwd: tmp, nonInteractive: true })).rejects.toThrow(/invalid task id/i);
+
+    expect(await pathExists(outside)).toBe(false);
+    expect(await readdir(path.join(tmp, ".wep/local/impl")).catch(() => [])).toEqual([]);
+  });
+
+  it("reads a slug-named log when it is the only log for the capsule", async () => {
+    await capsule();
+    await writeSlugLog();
+
+    const status = await runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true });
+
+    expect(status.attemptsUsed).toBe(1);
+    expect(status.logPath).toBe(`.wep/local/impl/${dirName}/log.md`);
+  });
+
+  it("appends to the slug-named log instead of opening a second one", async () => {
+    await capsule();
+    await writeSlugLog();
+
+    await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+
+    expect(parseLog(await readFile(slugLog(), "utf8"))).toHaveLength(2);
+    expect(await pathExists(shortLog())).toBe(false);
+  });
+
+  it("refuses every command while two logs exist for one capsule, and deletes neither", async () => {
+    await capsule();
+    await writeSlugLog();
+    await mkdir(path.dirname(shortLog()), { recursive: true });
+    await writeFile(shortLog(), "# Implementation Log — TASK-001\n", "utf8");
+
+    const started = await runImplStart("TASK-001", { cwd: tmp, nonInteractive: true });
+    const logged = await runImplLog("TASK-001", round(), { cwd: tmp, nonInteractive: true });
+    const status = await runImplStatus("TASK-001", { cwd: tmp, nonInteractive: true });
+
+    expect(started.refused).toBe(true);
+    expect(started.reason).toContain(`.wep/local/impl/${dirName}/log.md`);
+    expect(logged.refused).toBe(true);
+    expect(status.blocked).toContain(`.wep/local/impl/${dirName}/log.md`);
+    expect(await pathExists(slugLog())).toBe(true);
+    expect(parseLog(await readFile(slugLog(), "utf8"))).toHaveLength(1);
+  });
+});
