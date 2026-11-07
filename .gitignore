@@ -36,6 +36,9 @@ Thumbs.db
 !.codex/agents/
 .claude/settings.local.json
 
+# Local dogfooding state
+.wep/
+
 # Temporary files
 tmp/
 temp/

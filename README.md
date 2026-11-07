@@ -146,8 +146,7 @@ pnpm wep doctor --json
 
 Feature and fix evaluation guidance lives in [evals/README.md](evals/README.md).
 
-Wepwawet is published by [Khepri Lab](https://kheprilab.com), shared
-for reference, learning, and direct use. Pull requests, issues, and feature requests
-are not accepted; you are welcome to fork it. See [project policy](CONTRIBUTING.md).
+Wepwawet is the open-source core published by [Khepri Lab](https://kheprilab.com).
+See [Contributing](CONTRIBUTING.md) for the pull request and release workflow.
 
 Licensed under [MIT](LICENSE).

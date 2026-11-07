@@ -1,0 +1,24 @@
+#!/bin/sh
+
+export LC_ALL=C
+
+if [ "$#" -ne 1 ] || [ ! -r "$1" ]; then
+  echo "commit-msg: expected a readable commit message file." >&2
+  exit 1
+fi
+
+if grep -Ei 'co-authored-by:.*(claude|codex|copilot|anthropic|openai|cursor|gemini)|generated with' "$1" >/dev/null; then
+  echo "commit-msg: remove tool attribution from the commit message." >&2
+  exit 1
+fi
+
+first_line=$(sed -n '1p' "$1")
+case "$first_line" in
+  'Merge '*|'fixup! '*|'squash! '*) exit 0 ;;
+esac
+
+if ! printf '%s\n' "$first_line" | grep -E '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: .{1,100}$' >/dev/null; then
+  echo "commit-msg: use type(scope): subject, e.g. feat(cli): add an option." >&2
+  echo "Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Scope is optional; use ! for breaking changes; subject must be 1-100 characters." >&2
+  exit 1
+fi
