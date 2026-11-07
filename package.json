@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --sourcemap --clean",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",

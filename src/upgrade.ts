@@ -198,10 +198,11 @@ export async function runUpgrade(options: CommandOptions): Promise<UpgradeResult
 
 function resolveUpgradeTargets(config: WepConfig, requested: CommandOptions["target"]): Target[] {
   if (!requested || requested === "all") return [...config.targets];
-  if (!config.targets.includes(requested)) {
+  const selectedTarget = config.targets.find((target) => target === requested);
+  if (!selectedTarget) {
     throw new Error(`Target ${requested} is not installed. Installed targets: ${config.targets.join(", ")}.`);
   }
-  return [requested];
+  return [selectedTarget];
 }
 
 function desiredManagedFiles(config: WepConfig, targets: Target[]): Record<string, string> {

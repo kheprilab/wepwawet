@@ -1366,13 +1366,14 @@ export async function hasPreApprovedValidationCommands(
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
   const record = raw as Record<string, unknown>;
-  if (record.taskId !== taskId || !Array.isArray(record.commands) || typeof record.digest !== "string") return false;
-  if (!record.commands.every((cmd): cmd is string => typeof cmd === "string" && cmd.length > 0)) return false;
-  const expectedDigest = validationCommandsDigest(record.commands);
+  const commands = record.commands;
+  if (record.taskId !== taskId || !Array.isArray(commands) || typeof record.digest !== "string") return false;
+  if (!commands.every((cmd): cmd is string => typeof cmd === "string" && cmd.length > 0)) return false;
+  const expectedDigest = validationCommandsDigest(commands);
   if (record.digest !== expectedDigest) return false;
   if (validationCommandsDigest(declaredCommands) !== record.digest) return false;
-  if (JSON.stringify(record.commands) !== JSON.stringify(declaredCommands)) return false;
-  return commandsToRun.every((cmd) => record.commands.includes(cmd));
+  if (JSON.stringify(commands) !== JSON.stringify(declaredCommands)) return false;
+  return commandsToRun.every((cmd) => commands.includes(cmd));
 }
 
 export interface JudgeClosureSummary {

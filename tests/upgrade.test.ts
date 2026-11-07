@@ -701,7 +701,8 @@ describe("upgrade candidate hygiene", () => {
   it("walks nested candidates with only the Node 20.0 Dirent surface", async () => {
     const root = path.join(tmp, "upgrade");
     await mkdir(root, { recursive: true });
-    const tree = new Map<string, Array<Record<string, unknown>>>([
+    type ReadDirectory = NonNullable<Parameters<typeof collectRegularFiles>[1]>;
+    const tree = new Map<string, Awaited<ReturnType<ReadDirectory>>>([
       [
         root,
         [

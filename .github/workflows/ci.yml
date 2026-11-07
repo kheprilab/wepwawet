@@ -21,9 +21,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      # TODO: Add typecheck after resolving the 32 known pre-existing TypeScript errors.
       - run: npm pack --dry-run
 
   pr-title:
