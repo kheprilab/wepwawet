@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an improvement to Wepwawet.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing an idea! Issues are reviewed weekly.
+        Please wait for the maintainer to accept the issue before starting a pull request.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem it solves
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like Wepwawet to help?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Share any other approaches or workarounds you considered.

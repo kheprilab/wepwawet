@@ -12,7 +12,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "prepare": "pnpm build",
+    "prepare": "(git config core.hooksPath .githooks || true) && pnpm build",
     "wep": "node dist/index.js",
     "eval": "node evals/cli.mjs run --suite smoke",
     "eval:compare": "node evals/cli.mjs compare --suite smoke"
@@ -20,7 +20,10 @@
   "engines": {
     "node": ">=20"
   },
-  "files": ["dist", "README.md", "docs", "templates"],
+  "files": ["dist", "README.md", "LICENSE", "templates"],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@inquirer/select": "^4.4.2",
     "commander": "^13.1.0"
@@ -60,5 +63,8 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kheprilab/wepwawet.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kheprilab/wepwawet/issues"
   }
 }
