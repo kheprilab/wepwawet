@@ -1,6 +1,6 @@
 # Contributing
 
-Wepwawet is the open-source core published by [KhepriLab](https://kheprilab.com).
+Wepwawet is the open-source core published by [Kheprilab](https://kheprilab.com).
 Enterprise and paid features belong outside this repository.
 
 Wepwawet is maintained by one person in their spare time. Issues are reviewed weekly.
