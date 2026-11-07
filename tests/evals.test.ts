@@ -19,6 +19,7 @@ import { executeStep } from "../evals/lib/process.mjs";
 import { overallOutcome, summarizeResults, writeReport } from "../evals/lib/report.mjs";
 import { runScenario } from "../evals/lib/run.mjs";
 import { loadScenarioFiles, scenarioDigest, validateScenario } from "../evals/lib/scenario.mjs";
+import type { Assertion, Scenario } from "../evals/lib/types.mjs";
 
 const tempRoots: string[] = [];
 
@@ -33,7 +34,7 @@ afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-const validScenario = () => ({
+const validScenario = (): Scenario => ({
   id: "invalid-config-fails-loudly",
   title: "Corrupt config fails loudly",
   changeType: "fix",
@@ -183,7 +184,7 @@ describe("evaluation assertions", () => {
       { exitCode: 0, stdout: "ready\n", stderr: "", durationMs: 4 },
       { exitCode: 0, stdout: '{"totals":{"sessions":2}}\n', stderr: "", durationMs: 4 },
     ];
-    const assertions = [
+    const assertions: Assertion[] = [
       { type: "exitCode", step: 0, equals: 0 },
       { type: "stdoutContains", step: 0, value: "ready" },
       { type: "stderrExcludes", step: 0, value: "secret" },
@@ -204,7 +205,7 @@ describe("evaluation assertions", () => {
       { tempRoot, keepWorkdir: true },
     );
     const [fixtureDir] = await (await import("node:fs/promises")).readdir(tempRoot);
-    const assertions = [
+    const assertions: Assertion[] = [
       { type: "fileExists", path: "result.json" },
       { type: "jsonPathEquals", path: "result.json", jsonPath: "totals.sessions", equals: 2 },
     ];
@@ -458,14 +459,12 @@ describe("evaluation CLI", () => {
 
 describe("scenario assertion contract", () => {
   it("rejects unknown assertion types", () => {
-    const scenario = validScenario();
-    scenario.assertions = [{ type: "trustTheAgent" }];
+    const scenario = { ...validScenario(), assertions: [{ type: "trustTheAgent" }] };
     expect(() => validateScenario(scenario)).toThrow(/assertion type/i);
   });
 
   it("rejects assertion fields required by their type", () => {
-    const scenario = validScenario();
-    scenario.assertions = [{ type: "fileExists" }];
+    const scenario = { ...validScenario(), assertions: [{ type: "fileExists" }] };
     expect(() => validateScenario(scenario)).toThrow(/assertions\[0\]\.path/i);
   });
 });
@@ -519,7 +518,7 @@ describe("outcome evidence boundary", () => {
     expect(() => validateScenario(scenario)).toThrow(/outcome grader/i);
   });
 
-  it.each(["observability", "refactor"])(
+  it.each(["observability", "refactor"] as const)(
     "does not let a %s scenario declare improvement without an outcome grader",
     (changeType) => {
       const scenario = validScenario();
@@ -529,7 +528,7 @@ describe("outcome evidence boundary", () => {
     },
   );
 
-  it.each([undefined, "improved", "preserved", "inconclusive", "worsened"])(
+  it.each([undefined, "improved", "preserved", "inconclusive", "worsened"] as const)(
     "requires documentation outcome verdicts to be not-applicable instead of %s",
     (verdict) => {
       const scenario = validScenario();
@@ -548,17 +547,27 @@ describe("outcome evidence boundary", () => {
   });
 
   it("keeps the JSON schema aligned with the runtime evidence boundary", async () => {
-    const schema = JSON.parse(await readFile(path.join(process.cwd(), "evals/schema/scenario.schema.json"), "utf8"));
+    const schema: {
+      allOf: Array<{
+        if: {
+          properties: {
+            changeType?: { const?: string; enum?: string[] };
+            outcome?: { properties: { verdict: { const: string } } };
+          };
+        };
+        then: false | { properties: { outcome: unknown } };
+      }>;
+    } = JSON.parse(await readFile(path.join(process.cwd(), "evals/schema/scenario.schema.json"), "utf8"));
     const docsRule = schema.allOf.find((rule) => rule.if?.properties?.changeType?.const === "docs");
     const graderRule = schema.allOf.find(
       (rule) => rule.if?.properties?.outcome?.properties?.verdict?.const === "improved",
     );
-    expect(docsRule.then.properties.outcome).toMatchObject({
+    expect(docsRule && docsRule.then !== false && docsRule.then.properties.outcome).toMatchObject({
       required: ["verdict"],
       properties: { verdict: { const: "not-applicable" } },
     });
-    expect(graderRule.if.properties.changeType.enum).toEqual(["feature", "observability", "refactor"]);
-    expect(graderRule.then).toBe(false);
+    expect(graderRule?.if.properties.changeType?.enum).toEqual(["feature", "observability", "refactor"]);
+    expect(graderRule?.then).toBe(false);
   });
 });
 
@@ -569,7 +578,7 @@ describe("comparison outcome matrix", () => {
     ["pass", "fail"],
     ["fail", "pass"],
     ["fail", "fail"],
-  ];
+  ] as const;
   const declaredVerdicts = [undefined, "improved", "preserved", "inconclusive", "not-applicable", "worsened"];
 
   it.each(
@@ -627,26 +636,26 @@ describe("nested scenario strictness", () => {
   it.each([
     [
       "step",
-      (scenario) => {
-        scenario.steps[0].shell = true;
+      (scenario: Scenario) => {
+        Reflect.set(scenario.steps[0], "shell", true);
       },
     ],
     [
       "assertion",
-      (scenario) => {
-        scenario.assertions[0].message = "ignored";
+      (scenario: Scenario) => {
+        Reflect.set(scenario.assertions[0], "message", "ignored");
       },
     ],
     [
       "comparison",
-      (scenario) => {
-        scenario.comparison.note = "ignored";
+      (scenario: Scenario) => {
+        Reflect.set(scenario.comparison, "note", "ignored");
       },
     ],
     [
       "outcome",
-      (scenario) => {
-        scenario.outcome.score = 1;
+      (scenario: Scenario) => {
+        Reflect.set(scenario.outcome, "score", 1);
       },
     ],
   ])("rejects unknown %s keys", (_label, mutate) => {

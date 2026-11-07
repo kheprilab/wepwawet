@@ -81,7 +81,7 @@ export async function runInit(options: CommandOptions): Promise<InitResult> {
   if (effectiveModules !== undefined) {
     config.modules = effectiveModules;
   }
-  if (!existing && !judgeActive) {
+  if (!existing && !judgeActive && config.judge) {
     config.judge.enabled = false;
   }
   if (!existing) config.defaults.target = selectedTargets[0];

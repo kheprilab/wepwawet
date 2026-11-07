@@ -11,6 +11,12 @@ export interface CompileResult {
   outputPath: string;
 }
 
+export function runCompile(taskId: string, options: CommandOptions & { target: "all" }): Promise<CompileResult[]>;
+export function runCompile(taskId: string, options: CommandOptions & { target?: Target }): Promise<CompileResult>;
+export function runCompile(
+  taskId: string,
+  options: CommandOptions & { target?: TargetOption },
+): Promise<CompileResult | CompileResult[]>;
 export async function runCompile(
   taskId: string,
   options: CommandOptions & { target?: TargetOption },
@@ -71,5 +77,9 @@ ${checklist.trim()}
     return Promise.all(installedTargets.map(compileForTarget));
   }
 
-  return compileForTarget(target);
+  const selectedTarget = targets.find((candidate) => candidate === target);
+  if (!selectedTarget) {
+    throw new Error(`Unsupported target: "${target}". Valid targets: ${targets.join(", ")}.`);
+  }
+  return compileForTarget(selectedTarget);
 }

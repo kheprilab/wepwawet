@@ -14,7 +14,7 @@ By contributing, you agree that your contributions are licensed under the MIT Li
 
 Work on a branch and open a pull request; never push changes directly to main.
 Run `pnpm install --frozen-lockfile` to install dependencies and enable the commit hook.
-Before opening a PR, run `pnpm lint`, `pnpm test`, and `pnpm build`.
+Before opening a PR, run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build`.
 
 Use Conventional Commits for commit messages and PR titles:
 `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`, `build`, `perf`, `style`, or `revert`,

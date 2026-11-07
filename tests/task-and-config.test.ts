@@ -101,6 +101,16 @@ describe("task and compile", () => {
     );
   });
 
+  it("rejects an unsupported compile target before writing a brief", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    const task = await runTask("Fix auth bug", { cwd: tmp, nonInteractive: true });
+
+    await expect(runCompile(task.taskId, { cwd: tmp, target: "unknown", nonInteractive: true })).rejects.toThrow(
+      /unsupported target/i,
+    );
+    expect(await pathExists(path.join(tmp, task.taskDir, "exports/unknown.md"))).toBe(false);
+  });
+
   it("accepts an explicit workflow override", async () => {
     await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
     const task = await runTask("Define invoice API examples", { cwd: tmp, workflow: "sdd+edd", nonInteractive: true });
@@ -377,12 +387,11 @@ describe("task and compile", () => {
     const result = await runCompile(task.taskId, { cwd: tmp, target: "all", nonInteractive: true });
 
     expect(Array.isArray(result)).toBe(true);
-    const results = result as Array<{ target: string; outputPath: string }>;
-    expect(results.length).toBeGreaterThanOrEqual(2);
-    const targets = results.map((r) => r.target).sort();
+    expect(result.length).toBeGreaterThanOrEqual(2);
+    const targets = result.map((r) => r.target).sort();
     expect(targets).toContain("codex");
     expect(targets).toContain("claude");
-    for (const r of results) {
+    for (const r of result) {
       expect(await pathExists(path.join(tmp, r.outputPath))).toBe(true);
     }
   });
