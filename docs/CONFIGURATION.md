@@ -47,11 +47,11 @@ settings when both exist; inspect resolved state with `wep judge status`,
 ## Reading and repairing configuration
 
 Most commands reject invalid JSON, a non-object config, or a config with no recognized
-target. `doctor` reports these defects for diagnosis. Repair or restore invalid config
-before rerunning `init` or `doctor --fix`: init currently treats an unreadable config as
-absent when planning files. Without `--force`, syntax-invalid JSON can remain unchanged
-while a default full harness is created around it; `init --force` can replace it with
-defaults. Doctor repair can also create default files around an invalid config. `config show` normalizes recognized fields and fills
+target. `init` and `doctor --fix` validate existing configuration before writing files,
+including when `--force` or `--dry-run` is supplied. Repair or restore an unusable config
+manually before retrying; force does not bypass validation. Plain `doctor` remains
+available to diagnose the problem and write its reports. A missing config is distinct
+from an invalid one: `init` can create a new configuration. `config show` normalizes recognized fields and fills
 missing defaults in its output; it is not a byte-for-byte dump of the file.
 
 ## Show Config

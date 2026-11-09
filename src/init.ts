@@ -35,6 +35,7 @@ import { CLI_VERSION } from "./version.js";
 
 export async function runInit(options: CommandOptions): Promise<InitResult> {
   const cwd = options.cwd ?? process.cwd();
+  const existing = await readConfig(cwd);
   const profile = options.profile ?? "default";
   const detection = await detectTargets(cwd);
   const { target, selectedTargets } = await resolveTarget(options, detection.detected);
@@ -60,7 +61,6 @@ export async function runInit(options: CommandOptions): Promise<InitResult> {
       reason,
     });
 
-  const existing = await readExistingConfig(cwd);
   const effectiveModules: ModuleName[] | undefined =
     requestedModules !== undefined
       ? existing?.modules
@@ -483,10 +483,6 @@ async function readProjectName(cwd: string): Promise<string> {
     // no package.json or invalid JSON — fall through
   }
   return path.basename(cwd);
-}
-
-async function readExistingConfig(cwd: string) {
-  return readConfig(cwd).catch(() => undefined);
 }
 
 function mergeTargets(existing: Target[], selected: Target[]): Target[] {

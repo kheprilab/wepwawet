@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { agentFilePathList, agentWarningTexts, resolveAgents } from "./agents.js";
 import { isLocalIgnoreContentSafe, localIgnorePath } from "./comprehension.js";
-import { readConfigForDiagnosis, writeConfig } from "./config.js";
+import { readConfig, readConfigForDiagnosis, writeConfig } from "./config.js";
 import { detectTargets } from "./detect.js";
 import { listDirs, pathExists, writePlannedFile } from "./fs-utils.js";
 import {
@@ -44,6 +44,8 @@ import { lintWiki } from "./wiki-lint.js";
 
 export async function runDoctor(options: CommandOptions): Promise<DoctorResult> {
   const cwd = options.cwd ?? process.cwd();
+  // Repair must validate before diagnose writes its generated reports.
+  if (options.fix) await readConfig(cwd);
   const initial = await diagnose(cwd, options);
 
   if (!options.fix || !initial.installed) {
@@ -439,7 +441,7 @@ async function getConfigGaps(
     if (!Array.isArray(config.templatePacks)) gaps.push(".wep/config.json — missing templatePacks");
     return { gaps, installedVersion: config.installedVersion };
   } catch {
-    return { gaps: [".wep/config.json — invalid JSON (run wep init to regenerate)"] };
+    return { gaps: [".wep/config.json — invalid JSON (fix manually or restore from git)"] };
   }
 }
 

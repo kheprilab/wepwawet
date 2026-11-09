@@ -526,7 +526,7 @@ describe("silent degradation", () => {
     // repositories is its entire job. It reports the corruption rather than crashing.
     const result = await runDoctor({ cwd: tmp, nonInteractive: true });
 
-    expect(result.missing).toContain(".wep/config.json — invalid JSON (run wep init to regenerate)");
+    expect(result.missing).toContain(".wep/config.json — invalid JSON (fix manually or restore from git)");
   });
 
   it.each([

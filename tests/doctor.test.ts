@@ -461,13 +461,12 @@ describe("doctor --fix", () => {
     damage(config);
     await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
 
-    const result = await runDoctor({ cwd: tmp, fix: true, nonInteractive: true });
+    await expect(runDoctor({ cwd: tmp, fix: true, nonInteractive: true })).rejects.toThrow("no recognized target");
 
-    // Repair must not answer "which agent is this repository for?" by guessing. Writing
-    // ["codex"] into a Claude install both retargets the project and clears the gap that
-    // would have told the human to fix it, which is worse than leaving it broken.
+    // Repair must not answer "which agent is this repository for?" by guessing.
     const repaired = JSON.parse(await readFile(configPath, "utf8"));
     expect(repaired.targets ?? []).not.toContain("codex");
+    const result = await runDoctor({ cwd: tmp, nonInteractive: true });
     expect(result.missing).toContain(".wep/config.json — targets must list at least one supported target");
     expect(result.readiness).toBeLessThan(100);
   });
