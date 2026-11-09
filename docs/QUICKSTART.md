@@ -4,22 +4,15 @@ Install the harness, prepare project context, and give your agent its first task
 
 ## 1. Install
 
-The public release is not available from npm yet. With repository access, build and link from source:
+Requires Node.js 20+, npm, Git, and a supported coding agent.
 
 ```bash
-git clone https://github.com/kheprilab/wepwawet.git
-cd wepwawet
-pnpm install
-pnpm build
-pnpm link --global
-```
-
-Verify:
-
-```bash
+npm install -g wepwawet
 wep --version
 wep --help
 ```
+
+For development builds, see [building from source](INSTALLATION.md#build-from-source).
 
 ## 2. Init in your project
 

@@ -52,18 +52,14 @@ The task stays in the repository for the next session or another supported agent
 
 ## Quickstart
 
-Requires **Node.js 20+**, **pnpm**, **Git**, and a supported coding agent. The public
-release is not available from npm yet. Installation is from source; cloning requires
-access while the repository is private.
+Requires **Node.js 20+**, **npm**, **Git**, and a supported coding agent.
 
-**1. Clone, build, and link the CLI.**
+**1. Install the CLI.**
 
 ```bash
-git clone https://github.com/kheprilab/wepwawet.git
-cd wepwawet
-pnpm install
-pnpm build
-pnpm link --global
+npm install -g wepwawet
+wep --version
+wep --help
 ```
 
 **2. Initialize your project.**
@@ -86,7 +82,7 @@ Ask it to use the wep task workflow, as in the [example above](#a-first-task).
 The agent owns the workflow after initialization; CLI task commands are also
 available for scripts and headless use.
 
-See [installation details](docs/INSTALLATION.md) for local development and linking,
+See [installation details](docs/INSTALLATION.md) for updates and building from source,
 or follow the [task walkthrough](TUTORIAL.md) through implementation and review.
 
 ## How it works

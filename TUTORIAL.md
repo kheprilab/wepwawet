@@ -6,19 +6,15 @@ own CLI operations; your coding agent performs the coding and review work.
 
 ## 1. Install the CLI
 
-The public release is not available from npm yet. With access to the source repository:
+You need Node.js 20+, npm, Git, and a supported coding agent.
 
 ```bash
-git clone https://github.com/kheprilab/wepwawet.git
-cd wepwawet
-pnpm install
-pnpm build
-pnpm link --global
+npm install -g wepwawet
+wep --version
 wep --help
 ```
 
-You need Node.js 20+, pnpm, Git, and a supported coding agent. See
-[installation](docs/INSTALLATION.md) for linking and direct execution.
+See [installation](docs/INSTALLATION.md) for updates and development builds.
 
 ## 2. Initialize your project
 
