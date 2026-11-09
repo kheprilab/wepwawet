@@ -102,7 +102,7 @@ export interface JudgeVerifyResult {
   receipt: {
     digest: string;
     /** `in-place` passed with the developer's environment; `isolated` with dependencies from the lockfile. */
-    mode: "in-place" | "isolated";
+    mode: "in-place" | "isolated" | "documentation";
     results: Array<{ command: string; passed: boolean; evidence?: ValidationFailureEvidence }>;
   } | null;
   /** What the judge declared at review time. Never re-derived, only reported. */
@@ -399,6 +399,9 @@ export async function verifyJudgeRecord(
   const optionalCommands = declaration.checks.filter((check) => !check.required).map((check) => check.command);
   const claimedPassing = record.tests.filter((test) => test.status === "passed").map((test) => test.command);
   const declaredAndPassing = claimedPassing.filter((command) => declaredCommands.includes(command));
+  if (declaration.kind === "documentation" && record.tests.length > 0) {
+    reasons.push("A no-runtime-validation declaration requires an empty tests array; no runtime result is claimed.");
+  }
 
   // A failed optional command is a notice, not a reason; every other failure still blocks, declared
   // required or not — the conservative default does not relax for an undeclared command.
@@ -475,8 +478,8 @@ export async function verifyJudgeRecord(
   const reexecuted: JudgeVerifyResult["reexecuted"] = [];
   // Raw declared command -> outcome of the observed re-run. Empty unless `--run-tests` ran it.
   const observed = new Map<string, boolean>();
-  if (options.runTests && !options.receiptDigest) {
-    if (declaredAndPassing.length === 0) {
+  if (options.runTests && !options.receiptDigest && (declaration.kind !== "documentation" || !snapshot)) {
+    if (declaredAndPassing.length === 0 && declaration.kind !== "documentation") {
       reasons.push("--run-tests found no capsule-declared command claimed as passing to re-execute.");
     }
     if (!snapshot) {

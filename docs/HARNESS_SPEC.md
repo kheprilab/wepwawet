@@ -227,3 +227,14 @@ invocation. See
 A harness provides instructions and recorded context. It does not guarantee that a coding agent
 will follow them, that a review is correct, or that a task resumes automatically in a later
 session. See [Continuation](CONTINUATION.md) for the read-only portable execution-state record.
+
+## Documentation-only validation
+
+A single `no-runtime-validation: <reason>` line under the capsule's Validation heading declares
+that no runtime commands apply. It requires a reason and no other commands. The CLI still
+captures a snapshot and `judge run` writes an explicit documentation receipt with zero commands
+and results, without command approval or dependency setup. It exits 0 with
+`outcome: "no-runtime-validation"` and `passed: false`. The reviewer evaluates the criteria,
+records `tests: []`, and the trusted caller verifies against the printed receipt digest.
+The result is `not-applicable-to-runtime`, never a claim of runtime correctness. See
+[documentation-only review](JUDGE.md#declared-validation-commands).
