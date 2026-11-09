@@ -51,6 +51,14 @@
       }
     }
   },
+  "overrides": [
+    {
+      "include": ["package.json", ".release-please-manifest.json"],
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ],
   "javascript": {
     "formatter": {
       "quoteStyle": "double",
