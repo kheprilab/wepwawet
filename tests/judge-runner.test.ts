@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../src/cli.js";
 import { runInit } from "../src/init.js";
 import {
@@ -46,13 +46,18 @@ async function runLog(): Promise<string[]> {
   return text.split("\n").filter(Boolean);
 }
 
-async function createSnapshotFixture(commands: string[]) {
+async function createSnapshotFixture(commands: string[], documentation = false) {
   await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
   const task = await runTask("Run declared validation once", { cwd: tmp, nonInteractive: true });
   const taskFile = path.join(tmp, task.taskDir, "task.md");
   const original = await readFile(taskFile, "utf8");
   await writeFile(taskFile, original.replace("```\n```", `\`\`\`\n${commands.join("\n")}\n\`\`\``), "utf8");
-  await writeFile(path.join(tmp, "app.ts"), "export const value = 1;\n", "utf8");
+  const changedFile = documentation ? "README.md" : "app.ts";
+  await writeFile(path.join(tmp, changedFile), documentation ? "# Old usage\n" : "export const value = 1;\n");
+  if (documentation) {
+    // A documentation receipt must not try to provision dependencies without a lockfile.
+    await writeFile(path.join(tmp, "package.json"), '{"dependencies":{"never-install-this-fixture":"1.0.0"}}');
+  }
   for (const args of [
     ["init"],
     ["config", "user.email", "tests@example.com"],
@@ -62,7 +67,7 @@ async function createSnapshotFixture(commands: string[]) {
   ]) {
     await execFileAsync("git", args, { cwd: tmp });
   }
-  await writeFile(path.join(tmp, "app.ts"), "export const value = 2;\n", "utf8");
+  await writeFile(path.join(tmp, changedFile), documentation ? "# New usage\n" : "export const value = 2;\n");
   const snapshot = await captureJudgeSnapshot(tmp, task.taskId, "HEAD");
   return { task, snapshot };
 }
@@ -194,13 +199,93 @@ describe("judge run", () => {
       expect(serialized).not.toContain(`"${hostField}"`);
     }
   });
+});
 
-  it("refuses a capsule that declares no runtime validation", async () => {
-    const { task, snapshot } = await createSnapshotFixture(["no-runtime-validation: documentation only"]);
+describe("documentation-only review", () => {
+  const reason = "usage prose only; no executable behavior changed";
+  const fixture = () => createSnapshotFixture([`no-runtime-validation: ${reason}`], true);
 
-    await expect(
-      runJudgeValidation(tmp, task.taskId, snapshot.candidate, { approve: async () => true }),
-    ).rejects.toThrow(/no runtime validation/);
+  it.each([false, true])("issues and verifies an explicit zero-runtime receipt (isolated=%s)", async (isolated) => {
+    const { task, snapshot } = await fixture();
+    const approve = vi.fn(async () => false);
+    const onStart = vi.fn();
+
+    const run = await runJudgeValidation(tmp, task.taskId, snapshot.candidate, { isolated, approve, onStart });
+
+    expect(run).toMatchObject({ outcome: "no-runtime-validation", passed: false, exitCode: 0 });
+    expect(run.receipt).toMatchObject({ mode: "documentation", noRuntimeReason: reason, commands: [], results: [] });
+    expect(approve).not.toHaveBeenCalled();
+    expect(onStart).not.toHaveBeenCalled();
+    expect(await runLog()).toEqual([]);
+    const recordPath = await writeReview(task, snapshot.scope, [], { receiptDigest: run.receiptDigest });
+    const verified = await verifyJudgeRecord(tmp, recordPath, { receiptDigest: run.receiptDigest });
+    expect(verified.reasons).toEqual([]);
+    expect(verified.approved).toBe(true);
+    expect(verified.verifiedNow).toMatchObject({ value: "not-applicable-to-runtime", reviewBoundary: "CURRENT" });
+    expect(verified.receipt?.mode).toBe("documentation");
+  });
+
+  it("rejects fabricated test results even without a pinned receipt", async () => {
+    const { task, snapshot } = await fixture();
+    const recordPath = await writeReview(task, snapshot.scope, [{ command: "echo invented", status: "passed" }]);
+
+    const verified = await verifyJudgeRecord(tmp, recordPath);
+
+    expect(verified.approved).toBe(false);
+    expect(verified.reasons.join("\n")).toMatch(/empty tests/);
+  });
+
+  it.each(["reason", "mode"])("rejects a receipt with the wrong documentation %s", async (field) => {
+    const { task, snapshot } = await fixture();
+    const run = await runJudgeValidation(tmp, task.taskId, snapshot.candidate);
+    const digest = await forgeReceipt(path.join(tmp, run.receiptPath), (receipt) => {
+      if (field === "reason") receipt.noRuntimeReason = "a different declaration";
+      else {
+        receipt.mode = "isolated";
+        receipt.noRuntimeReason = undefined;
+      }
+    });
+    const recordPath = await writeReview(task, snapshot.scope, [], { receiptDigest: digest });
+
+    const verified = await verifyJudgeRecord(tmp, recordPath, { receiptDigest: digest });
+
+    expect(verified.approved).toBe(false);
+    expect(verified.reasons.join("\n")).toMatch(/documentation/);
+  });
+
+  it.each([false, true])("supports documentation catch-up (pinned parent=%s)", async (pinned) => {
+    const { task, snapshot } = await fixture();
+    const run = await runJudgeValidation(tmp, task.taskId, snapshot.candidate);
+    const recordPath = await writeReview(task, snapshot.scope, [], { receiptDigest: run.receiptDigest });
+    await writeFile(path.join(tmp, "README.md"), "# Revised usage\n");
+    const approve = vi.fn(async () => false);
+
+    const next = await captureJudgeCatchUpSnapshot(
+      tmp,
+      task.taskId,
+      path.relative(tmp, recordPath),
+      approve,
+      false,
+      pinned ? { receiptDigest: run.receiptDigest } : {},
+    );
+    const nextRun = await runJudgeValidation(tmp, task.taskId, next.candidate);
+    const nextRecord = await writeReview(task, next.scope, [], { receiptDigest: nextRun.receiptDigest }, "next.json");
+    const verified = await verifyJudgeRecord(tmp, nextRecord, { receiptDigest: nextRun.receiptDigest });
+
+    expect(verified.approved).toBe(true);
+    expect(approve).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a failed criterion with a valid documentation receipt", async () => {
+    const { task, snapshot } = await fixture();
+    const run = await runJudgeValidation(tmp, task.taskId, snapshot.candidate);
+    const ids = (await readAcceptanceCriteria(tmp, task.taskId)).ids;
+    const recordPath = await writeReview(task, snapshot.scope, [], {
+      receiptDigest: run.receiptDigest,
+      criteria: ids.map((id) => ({ id, status: "fail", evidence: "The requested documentation is missing." })),
+    });
+
+    expect((await verifyJudgeRecord(tmp, recordPath, { receiptDigest: run.receiptDigest })).approved).toBe(false);
   });
 });
 
@@ -452,6 +537,23 @@ describe("CLI", () => {
     await expect(
       runCli(["judge", "snapshot", task.taskId, "--receipt-digest", `sha256:${"5".repeat(64)}`]),
     ).rejects.toThrow(/--receipt-digest only applies with --from-review/);
+  });
+
+  it("reports documentation as zero runtime validation, not a passing runtime run", async () => {
+    const { task, snapshot } = await createSnapshotFixture(["no-runtime-validation: documentation only"], true);
+
+    const run = await runCli(["judge", "run", task.taskId, "--candidate", snapshot.candidate, "--json"]);
+    expect(run.exitCode ?? 0).toBe(0);
+    expect(JSON.parse(run.output)).toMatchObject({
+      outcome: "no-runtime-validation",
+      passed: false,
+      mode: "documentation",
+      results: [],
+      noRuntimeReason: "documentation only",
+    });
+    const human = await runCli(["judge", "run", task.taskId, "--candidate", snapshot.candidate]);
+    expect(human.output).toContain("NO RUNTIME VALIDATION");
+    expect(human.output).not.toContain("PASSED");
   });
 });
 

@@ -104,7 +104,11 @@ const reviewSchema = {
       then: {
         properties: {
           tests: {
-            contains: { properties: { status: { const: "passed" } }, required: ["status"] },
+            description: "Empty only for explicit no-runtime-validation declarations; the CLI checks the capsule.",
+            anyOf: [
+              { maxItems: 0 },
+              { contains: { properties: { status: { const: "passed" } }, required: ["status"] } },
+            ],
           },
           criteria: {
             minItems: 1,
@@ -124,6 +128,8 @@ The trusted caller normally captures \`wep judge snapshot TASK-XXX --base <ref>\
 Scope and snapshot capture fail closed when changed files include a different task capsule under \`.wep/tasks/TASK-YYY-*\`. The error lists every foreign task ID and path; isolate the worktree or explicitly repeat \`--include-task TASK-YYY\` on \`judge scope\` or \`judge snapshot\`. Explicit inclusions are recorded in \`scope.includedTaskIds\` and bound to \`scopeDigest\`; catch-up snapshots preserve the parent's decision. Other changed files remain in the boundary — wep does not infer or silently omit source files.
 
 An empty boundary is rejected by \`judge snapshot\` unless the caller passes \`--allow-empty\`. That explicit authorization is recorded as \`emptyBoundaryAuthorized: true\` in the snapshot metadata and scope and is part of the snapshot identity; ordinary snapshots keep it false. The human \`SNAPSHOT:<id>\` is the immutable capture ID, while a later \`<review.json>\` is the separate judge verdict record.
+
+A lone \`no-runtime-validation: <reason>\` declaration uses the same snapshot and pinned-receipt sequence. \`judge run\` executes nothing, requests no command approval, and does not provision dependencies. It writes a version 2 receipt with \`mode: "documentation"\`, the exact \`noRuntimeReason\`, and empty \`commands\` and \`results\`. The CLI reports \`outcome: "no-runtime-validation"\`, \`passed: false\` and exit 0. The review must carry \`tests: []\`; criteria and snapshot checks still apply. A forged runtime test or a mismatched declaration/receipt is rejected. Verification reports \`not-applicable-to-runtime\`. For this explicit declaration, \`verify --run-tests\` checks the snapshot and review without executing anything; it never provisions a validation workspace.
 
 Before using an approval, run \`wep judge verify <review.json> --receipt-digest <digest>\` with the digest \`judge run\` printed, or \`--run-tests\` for a fresh run. Verification checks the record shape and recomputes SHA-256 digests for the task capsule and exact code boundary. A snapshot approval remains valid when the live workspace moves; tampering with the snapshot or any catch-up ancestor invalidates it. \`wep judge current <review.json>\` first rejects an invalid or non-approved record, then reports whether live content is \`CURRENT\`, has \`NEWER_CHANGES\`, or \`DIVERGED\`. This binds a verdict to evidence; it does not cryptographically prove which model produced the verdict.
 
@@ -171,7 +177,7 @@ A passing command is a necessary condition, never a verdict. The judge still dec
 
 \`wep judge verify\` also reads a stored schema version ${LEGACY_JUDGE_SCHEMA_VERSION} record, which carried a free-form \`issues\` list. Such a record is verified under the version ${LEGACY_JUDGE_SCHEMA_VERSION} rules, reported as legacy, and never emitted again.
 
-When the capsule's \`task.md\` declares commands in a fenced block under \`## Validation\`, every required command — any non-empty line not starting with \`#\` and not suffixed \`# optional\` — must pass for \`APPROVED\`. A line suffixed \`# optional\` may fail; that is reported as a warning and does not block approval. At least one declared command must still be the passing entry in \`tests\`; a judge cannot satisfy the evidence rule with a command it invented, even when every declared command is optional. A single \`no-runtime-validation: <reason>\` line inside the fence declares no runtime validation; it requires a non-empty reason and zero commands, and does not claim any code was verified. A capsule with no \`## Validation\` section is legacy: verification reports \`verifiedNow: unknown\`, but the record's historical \`approved\` verdict can still stand.
+When the capsule's \`task.md\` declares commands in a fenced block under \`## Validation\`, every required command — any non-empty line not starting with \`#\` and not suffixed \`# optional\` — must pass for \`APPROVED\`. A line suffixed \`# optional\` may fail; that is reported as a warning and does not block approval. For runtime-validation capsules, at least one declared command must still be the passing entry in \`tests\`; a judge cannot satisfy the evidence rule with a command it invented, even when every declared command is optional. A single \`no-runtime-validation: <reason>\` line inside the fence declares no runtime validation; it requires a non-empty reason and zero commands, and does not claim any code was verified. A capsule with no \`## Validation\` section is legacy: verification reports \`verifiedNow: unknown\`, but the record's historical \`approved\` verdict can still stand.
 
 ## Validation receipt
 
@@ -189,7 +195,7 @@ Run it from the trusted caller, before any handoff, when you want a fresh run in
 
 ## What this does and does not prove
 
-It proves the verdict is bound to a specific task capsule and code boundary, that the boundary still matches the repository, and — with \`--receipt-digest\` or \`--run-tests\` — that the declared validation really passed for that boundary and left it intact.
+It proves the verdict is bound to a specific task capsule and code boundary, that the boundary still matches the repository, and — with \`--receipt-digest\` or \`--run-tests\` — that declared runtime validation passed for that boundary and left it intact, or that the explicit documentation-only declaration requires no runtime commands.
 
 The snapshot integrity check fingerprints every tracked and untracked-but-not-ignored path by its content *and* its change-time (ctime), so a file changed and restored to its original bytes — or a file created and deleted inside a tracked directory — is still reported as a modification after capture, not only a final content mismatch. The inode number is deliberately not part of the fingerprint: on FUSE and some network mounts it is synthesized by the daemon and drifts over time even when nothing changed, which would make an honest snapshot permanently unreviewable. Ignored paths are outside this manifest, and capture builds nothing: a build output that Git ignores is absent from the snapshot, so a validation that needs it declares the build command before the commands that use it. Dependencies remain untrusted, which is why \`judge run\` and \`--run-tests\` materialise them from the lockfile instead of trusting the snapshot's copy. This is tamper-evident bookkeeping, not a sandbox — a determined reviewer with shell access can still damage things wep cannot see.
 

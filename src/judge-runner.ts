@@ -75,11 +75,13 @@ export interface ValidationReceipt {
   /** Version 1 receipts predate `mode`; they were always isolated runs. */
   version: 1 | typeof RECEIPT_VERSION;
   /**
-   * The two modes prove different things. Isolated: the validation passes with dependencies
+   * Runtime modes prove different things. Isolated: the validation passes with dependencies
    * installed from the lockfile. In-place: it passes with the developer's existing environment,
-   * which may not match the lockfile.
+   * which may not match the lockfile. Documentation records an explicit zero-runtime declaration.
    */
   mode?: JudgeRunMode;
+  /** Documentation only: the exact reason declared by the immutable task capsule. */
+  noRuntimeReason?: string;
   /** In-place only: the live content digest before and after the commands. Both must equal the snapshot's. */
   beforeDigest?: string;
   afterDigest?: string;
@@ -98,17 +100,17 @@ export interface ValidationReceipt {
   finishedAt: string;
 }
 
-export type JudgeRunMode = "in-place" | "isolated";
+export type JudgeRunMode = "in-place" | "isolated" | "documentation";
 
 export interface JudgeRunResult {
   receipt: ValidationReceipt;
   /** Relative to the project root, with forward slashes. */
   receiptPath: string;
   receiptDigest: string;
-  /** Every required command passed and validation left the boundary intact. */
+  /** True only when runtime commands passed and validation left the boundary intact. */
   passed: boolean;
-  outcome: "passed" | "failed" | "invalidated";
-  /** 0 passed, 1 a required command failed, 5 the tree changed during the run. */
+  outcome: "passed" | "failed" | "invalidated" | "no-runtime-validation";
+  /** 0 completed (including documentation), 1 a required command failed, 5 boundary drift. */
   exitCode: 0 | 1 | 5;
   /** Covered paths that changed during the run (in-place) or in the disposable copy (isolated). */
   changedPaths: string[];
@@ -213,7 +215,36 @@ export async function runJudgeValidation(
   }
   const declaration = await readValidationDeclaration(snapshot.worktreePath, taskId);
   if (declaration.kind === "documentation") {
-    throw new Error(`${taskId} declares no runtime validation (${declaration.reason}); there is nothing to run.`);
+    if (!declaration.reason) throw new Error("Documentation validation requires an explicit reason.");
+    const timestamp = new Date().toISOString();
+    const receipt: ValidationReceipt = {
+      type: RECEIPT_TYPE,
+      version: RECEIPT_VERSION,
+      mode: "documentation",
+      noRuntimeReason: declaration.reason,
+      cliVersion: CLI_VERSION,
+      taskId,
+      snapshotId: snapshot.id,
+      candidate: snapshot.candidate,
+      reviewContentDigest: snapshot.metadata.reviewContentDigest,
+      reviewWorkspaceDigest: snapshot.metadata.reviewWorkspaceDigest,
+      commands: [],
+      commandsDigest: validationCommandsDigest([]),
+      lockfileDigest: await lockfileDigest(snapshot.worktreePath),
+      results: [],
+      drift: [],
+      startedAt: timestamp,
+      finishedAt: timestamp,
+    };
+    return {
+      receipt,
+      ...(await persistReceipt(cwd, snapshot, receipt)),
+      passed: false,
+      outcome: "no-runtime-validation",
+      exitCode: 0,
+      changedPaths: [],
+      notices: [],
+    };
   }
   const commands = declaration.commands;
   if (commands.length === 0) {
@@ -291,19 +322,12 @@ export async function runJudgeValidation(
       startedAt,
       finishedAt: new Date().toISOString(),
     };
-    const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
-    const hex = createHash("sha256").update(bytes).digest("hex");
-    const file = receiptFile(snapshot, hex);
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, bytes, "utf8");
-
     const required = declaration.checks.filter((check) => check.required).map((check) => check.command);
     const commandsPassed = executed.every((item) => item.passed || !required.includes(item.command));
     const outcome = drift.length > 0 ? "invalidated" : commandsPassed ? "passed" : "failed";
     return {
       receipt,
-      receiptPath: path.relative(cwd, file).split(path.sep).join("/"),
-      receiptDigest: `sha256:${hex}`,
+      ...(await persistReceipt(cwd, snapshot, receipt)),
       passed: outcome === "passed",
       outcome,
       exitCode: outcome === "passed" ? 0 : outcome === "failed" ? 1 : 5,
@@ -313,6 +337,18 @@ export async function runJudgeValidation(
   } finally {
     await lock.release();
   }
+}
+
+async function persistReceipt(cwd: string, snapshot: LoadedJudgeSnapshot, receipt: ValidationReceipt) {
+  const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
+  const hex = createHash("sha256").update(bytes).digest("hex");
+  const file = receiptFile(snapshot, hex);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, bytes, "utf8");
+  return {
+    receiptPath: path.relative(cwd, file).split(path.sep).join("/"),
+    receiptDigest: `sha256:${hex}`,
+  };
 }
 
 /** Version 1 receipts were always isolated runs. */
@@ -359,6 +395,13 @@ export async function receiptBindingReasons(
   declaration: ValidationDeclaration,
 ): Promise<string[]> {
   const reasons: string[] = [];
+  if (receipt.mode === "documentation") {
+    if (declaration.kind !== "documentation" || receipt.noRuntimeReason !== declaration.reason) {
+      reasons.push("The documentation receipt does not match the capsule's no-runtime-validation declaration.");
+    }
+  } else if (declaration.kind === "documentation") {
+    reasons.push("A documentation declaration requires an explicit documentation receipt, not a runtime receipt.");
+  }
   if (
     receipt.snapshotId !== snapshot.id ||
     receipt.candidate !== snapshot.candidate ||
@@ -436,7 +479,14 @@ function isReceipt(value: unknown): value is ValidationReceipt {
     (receipt.version === 1
       ? receipt.mode === undefined
       : receipt.version === RECEIPT_VERSION &&
-        (receipt.mode === "isolated" ||
+        ((receipt.mode === "documentation" &&
+          typeof receipt.noRuntimeReason === "string" &&
+          receipt.noRuntimeReason.trim().length > 0 &&
+          Array.isArray(receipt.commands) &&
+          receipt.commands.length === 0 &&
+          Array.isArray(receipt.results) &&
+          receipt.results.length === 0) ||
+          receipt.mode === "isolated" ||
           (receipt.mode === "in-place" &&
             typeof receipt.beforeDigest === "string" &&
             DIGEST_PATTERN.test(receipt.beforeDigest) &&

@@ -372,10 +372,19 @@ no-runtime-validation: prose changes only; no executable behavior changed
 ```
 ````
 
-This permits plain verification without a passing command and reports
-`verifiedNow: not-applicable-to-runtime`. `judge run` refuses it because there is nothing to
-execute. The generated reviewer prompt still requests a receipt, so a no-runtime capsule does
-not follow the normal receipt-run sequence. It must never be described as runtime-verified.
+This follows the normal snapshot, receipt, and review sequence without running commands.
+`judge run` returns exit 0 with `outcome: "no-runtime-validation"`, `passed: false`, and a
+receipt whose `mode` is `documentation`. Its `noRuntimeReason` matches the exact reason in
+the snapshot capsule; `commands` and `results` are empty. There is no command approval,
+run lock, dependency installation, or validation workspace, including with `--isolated`.
+
+Give the receipt to the independent judge and verify its record with the digest printed by
+`judge run`. The judge still evaluates every acceptance criterion and must report `tests: []`.
+Fabricated runtime results, a mismatched receipt reason, failed criteria, or snapshot tampering
+prevent approval. Verification reports `verifiedNow: not-applicable-to-runtime`.
+`verify --run-tests` checks this explicit zero-runtime declaration without executing anything;
+catch-up also supports this path. Neither command claims that code was runtime-verified.
+An empty or malformed validation block still cannot use the documentation path.
 
 ### Validation receipt run
 

@@ -347,6 +347,8 @@ export function registerJudge(program: Command): void {
         "`wep judge verify <review.json> --receipt-digest <digest>`. Keep the digest",
         "from this output: the receipt is a local file, and only the digest you saw here",
         "proves it is the one this run wrote.",
+        "An explicit no-runtime-validation declaration writes a documentation receipt",
+        "with no commands or results; it runs nothing and needs no execution approval.",
         "",
         "Nothing runs without your approval: commands pre-approved with",
         "`wep task approve-commands`, the terminal prompt, or --approve-commands once",
@@ -397,7 +399,7 @@ export function registerJudge(program: Command): void {
               },
             }),
           undefined,
-          (result) => result.passed,
+          (result) => result.exitCode === 0,
         );
       } catch (error) {
         if (!(error instanceof JudgeRunRefusal)) throw error;
@@ -427,6 +429,7 @@ export function registerJudge(program: Command): void {
               receiptPath: result.receiptPath,
               receiptDigest: result.receiptDigest,
               results: result.receipt.results,
+              ...(result.receipt.noRuntimeReason ? { noRuntimeReason: result.receipt.noRuntimeReason } : {}),
               paths: result.changedPaths,
               drift: result.receipt.drift,
             },
@@ -435,8 +438,16 @@ export function registerJudge(program: Command): void {
           ),
         );
       } else {
-        const label = { passed: green("PASSED"), failed: yellow("FAILED"), invalidated: yellow("INVALIDATED") };
+        const label = {
+          passed: green("PASSED"),
+          failed: yellow("FAILED"),
+          invalidated: yellow("INVALIDATED"),
+          "no-runtime-validation": bold("NO RUNTIME VALIDATION"),
+        };
         log(`${bold("Judge run:")} ${label[result.outcome]}`);
+        if (result.receipt.noRuntimeReason) {
+          log(`  ${dim("No commands executed:")} ${result.receipt.noRuntimeReason}`);
+        }
         for (const item of result.receipt.results) {
           log(`  ${item.status === "passed" ? plus() : minus()} ${cmd(item.command)}`);
           if (item.evidence) {
