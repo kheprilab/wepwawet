@@ -7,7 +7,7 @@ or CHANGELOG.md, create release tags, or run publishing commands locally.
 2. Review the release-please PR: package.json, src/version.ts, the release manifest,
    and CHANGELOG.md must agree. Feature commits bump the minor version while pre-1.0;
    fixes bump the patch version.
-3. Confirm CI passes (`pnpm lint`, `pnpm test`, `pnpm build`, `npm pack --dry-run`).
+3. Confirm CI passes (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `npm pack --dry-run`).
    Close and reopen a release PR as a maintainer to trigger CI when it was created
    with the default GitHub token.
 4. Merge the release PR. release-please creates the GitHub release and tag; the publish

@@ -1,6 +1,6 @@
 # Target Adapters
 
-Each target adapter translates the wep harness into the format the agent understands. The neutral source of truth (`.wep/`) is always the same regardless of target.
+Each target adapter translates the wep harness into the format the agent understands. The neutral source of truth (`.wep/`) is shared across targets. The layouts below describe a full installation; `--modules` can install a smaller set. See [modules](CONFIGURATION.md#modules).
 
 ## Codex
 
@@ -12,8 +12,9 @@ AGENTS.md                                ← main instructions (protected)
 .agents/skills/wep-review/SKILL.md
 .agents/skills/wep-workflow/SKILL.md
 .agents/skills/wep-write-policy/SKILL.md
-.codex/agents/wep-judge.toml          ← optional, created by `wep judge enable`
-.codex/agents/wep-comprehension.toml  ← optional, created by `wep comprehension enable`
+.codex/agents/wep-judge.toml          ← enabled by normal init; also managed by `wep judge enable`
+.codex/agents/wep-comprehension.toml  ← opt-in: `wep comprehension enable`
+.codex/agents/wep-implementer.toml    ← opt-in: `wep impl enable`
 ```
 
 `AGENTS.md` is the primary instruction file Codex reads. Skills are loaded on demand when the agent invokes a workflow. Judge uses Codex's native subagent system (`.codex/agents/*.toml`).
@@ -32,11 +33,12 @@ CLAUDE.md                                ← main instructions (protected)
 .claude/skills/wep-review/SKILL.md
 .claude/skills/wep-workflow/SKILL.md
 .claude/skills/wep-write-policy/SKILL.md
-.claude/agents/wep-judge.md           ← optional, created by `wep judge enable`
-.claude/agents/wep-comprehension.md   ← optional, created by `wep comprehension enable`
+.claude/agents/wep-judge.md           ← enabled by normal init; also managed by `wep judge enable`
+.claude/agents/wep-comprehension.md   ← opt-in: `wep comprehension enable`
+.claude/agents/wep-implementer.md     ← opt-in: `wep impl enable`
 ```
 
-`CLAUDE.md` is the primary instruction file Claude Code reads. Commands are slash-command shortcuts. Skills load on demand. Judge uses Claude Code's native subagent system (`.claude/agents/*.md` with YAML frontmatter).
+`CLAUDE.md` is the primary instruction file Claude Code reads. Commands are slash-command shortcuts. Skills load on demand. Judge uses Claude Code's native subagent system (`.claude/agents/*.md` with YAML frontmatter). Enabling the judge also installs a guard hook in `.claude/settings.local.json` to refuse file-writing tools while a judge validation run holds its lock. Other hosts rely on the after-run change check.
 
 ---
 
@@ -55,8 +57,9 @@ CLAUDE.md                                ← main instructions (protected)
 .github/skills/wep-review/SKILL.md
 .github/skills/wep-workflow/SKILL.md
 .github/skills/wep-write-policy/SKILL.md
-.github/agents/wep-judge.agent.md     ← optional, created by `wep judge enable`
-.github/agents/wep-comprehension.agent.md ← optional, created by `wep comprehension enable`
+.github/agents/wep-judge.agent.md     ← enabled by normal init; also managed by `wep judge enable`
+.github/agents/wep-comprehension.agent.md ← opt-in: `wep comprehension enable`
+.github/agents/wep-implementer.agent.md   ← opt-in: `wep impl enable`
 ```
 
 Copilot reads `copilot-instructions.md` globally. Instructions files scope rules to file patterns. Prompts are reusable conversation starters. Judge uses Copilot's native agent system (`.github/agents/*.agent.md`).
@@ -78,7 +81,7 @@ Copilot reads `copilot-instructions.md` globally. Instructions files scope rules
 .pi/skills/wep-write-policy/SKILL.md
 ```
 
-Pi has no native subagent API. The judge is not available for Pi targets. `wep judge enable` skips Pi automatically.
+Wepwawet has no native subagent adapter for Pi. Judge, comprehension, and implementer agents are not available for Pi. Their enable commands skip Pi automatically; workflow prompts and skills remain available.
 
 ---
 
@@ -86,9 +89,14 @@ Pi has no native subagent API. The judge is not available for Pi targets. `wep j
 
 ```
 .wep/
-  config.json          ← workflow defaults, installed version, judge config
+  config.json          ← modules, defaults, installed version, agent settings
+  manifest.json        ← hashes of generated files written by wep
   policy.json          ← merge strategy, blocked read patterns, context budget
+  local/               ← Git-ignored review, implementation, tracing, and learning records
+  judge/               ← review contract and schema
+  comprehension/       ← comprehension contract and schemas
   wiki/
+    index.md           ← wiki catalog
     overview.md        ← project name, installed targets, quick reference
     architecture.md
     conventions.md
@@ -111,4 +119,4 @@ Pi has no native subagent API. The judge is not available for Pi targets. `wep j
     pi.md
 ```
 
-The neutral layer is always written regardless of which target is installed. Target adapters are thin — they translate the harness into the format each agent expects.
+The selected modules determine which neutral files are written; a full init writes the layout above regardless of target. Target adapters are thin — they translate the harness into the format each agent expects.

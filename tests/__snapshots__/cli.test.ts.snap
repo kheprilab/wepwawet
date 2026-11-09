@@ -137,8 +137,8 @@ Options:
                           "regulated")
   --modules <modules>     comma-separated modules to install (templates, tasks,
                           judge, comprehension, impl, trace)
-  --template <name>       apply a bundled enterprise template pack
-  --template-pack <path>  apply a target-relative enterprise template pack
+  --template <name>       apply a bundled template pack
+  --template-pack <path>  apply a target-relative template pack
   --target <target>       target agent (choices: "codex", "claude", "copilot",
                           "pi", "all")
   --dry-run               show planned writes without writing files (default:

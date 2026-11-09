@@ -7,12 +7,14 @@ Installs the wep harness into the current repository.
 ```bash
 wep init
 wep init --target codex
+wep init --target codex,claude
 wep init --target all
 wep init --target copilot --dry-run
 wep init --target copilot --profile regulated
 wep init --target copilot --template test-template
 wep init --target copilot --template-pack ./company-template
-wep init --force          # update wep-owned files that already exist
+wep init --modules tasks --target codex
+wep init --force          # overwrite existing non-protected generated files
 ```
 
 Flow:
@@ -20,7 +22,7 @@ Flow:
 ```
 1. scan current directory
 2. detect existing agent setup (Codex, Claude, Copilot, Pi)
-3. ask which target if ambiguous (skipped with --target)
+3. select a single detected target, or prompt if none/several (headless use needs --target)
 4. create .wep/ — neutral source of truth
 5. install target-specific harness files
 6. apply the selected profile and template pack when provided
@@ -28,12 +30,36 @@ Flow:
 8. report what was created, updated, or suggested
 ```
 
+A normal init installs all modules and enables the judge on supported hosts.
+Comprehension, implementer, and tracing are disabled until enabled separately.
+Use `--modules` to install a smaller set. `--template` and `--template-pack` are
+mutually exclusive and require one target. Profiles initialize a new project; a rerun
+preserves its existing config values. Init is not a safe config-recovery command:
+repair invalid configuration before rerunning it. See [configuration](CONFIGURATION.md).
+
 If a protected file already exists, init writes a suggested variant instead:
 
 ```
 AGENTS.md → AGENTS.wep.suggested.md
 CLAUDE.md → CLAUDE.wep.suggested.md
 ```
+
+---
+
+## `wep enable`
+
+Adds modules to an initialized harness, including their dependencies:
+
+```bash
+wep enable tasks --dry-run
+wep enable judge,comprehension
+```
+
+Valid names are `templates`, `tasks`, `judge`, `comprehension`, `impl`, and `trace`.
+This installs module files; it does not switch the optional agents or tracing on. Use
+`wep judge enable`, `wep comprehension enable`, `wep impl enable`, or `wep trace enable`
+for those settings. There is no general module-disable command. See
+[the dependency table](CONFIGURATION.md#modules).
 
 ---
 
@@ -79,7 +105,7 @@ For a pending instruction merge, the Doctor agent compares the protected file wi
 
 ## `wep templates`
 
-Lists bundled enterprise template packs shipped with the CLI package.
+Lists reusable template packs shipped with the CLI package.
 
 ```bash
 wep templates list
@@ -106,13 +132,14 @@ See [TEMPLATE_PACKS.md](TEMPLATE_PACKS.md) for the template pack format.
 wep templates apply company-base
 wep templates apply ./company-template --local
 wep templates apply security-rules --target copilot --dry-run
+wep templates update ./company-template --local --target copilot --dry-run
 wep templates status
 wep templates status --json
 ```
 
-`templates apply` requires an installed harness and valid manifest. It never reruns `init` and rejects `--force`. With one installed target it selects it automatically; projects with multiple targets must pass one explicit `--target` and apply once per target.
+`templates apply` requires an installed harness and valid manifest. It never reruns `init` and rejects `--force`. Without `--target`, it applies to all configured targets. `--target all` also selects all installed targets; a comma-separated list selects a subset.
 
-Several packs are composed by applying them sequentially. Existing non-root content that differs is preserved and receives a versioned candidate under `.wep/template-candidates/<name>/<version>/`. These conflicts block the pack transaction, so config, policy, and missing files remain unchanged until the candidate is resolved and the command is rerun. Root instructions are nonblocking: they use `.wep.suggested.md` and the human-approved Doctor merge workflow.
+Several packs are composed by applying them sequentially. Existing non-root content that differs is preserved and receives a versioned candidate under `.wep/template-candidates/<name>/<version>/`. These conflicts block the pack transaction, so config, policy, and missing files remain unchanged until the candidate is resolved and the command is rerun. Root instructions are nonblocking: they use `.wep.suggested.md` and the human-approved Doctor merge workflow. `templates update` uses recorded hashes to replace unchanged pack-owned files and offers candidates for user edits. Unlike apply, update can write clean files and config/policy while reporting unresolved conflicts; it is not transactional. See [TEMPLATE_PACKS.md](TEMPLATE_PACKS.md) for multi-target behavior, custom agents, and update constraints.
 
 ---
 
@@ -125,7 +152,7 @@ wep status
 wep status --json
 ```
 
-Shows installed targets, task count, recent task IDs, default workflow, and context budget.
+Shows installed targets, detected but uninstalled setups, task count, recent task IDs, default workflow, context budget, resolved agent state, pending comprehension sessions, and any active judge-run lock.
 
 ---
 
@@ -164,10 +191,13 @@ Creates, lists, shows, or removes task capsules. Intended as a headless fallback
 ```bash
 wep task "Fix regression in invoice calculation"
 wep task "Define invoice API examples" --workflow SDD+EDD
-wep task "Create settings screen" --workflow "UI review"
+wep task "Review settings screen"  # may auto-select UI review
 
 wep task list
 wep task show TASK-001
+wep task search "session expiry" --json
+wep task continuation TASK-001 --json
+wep task approve-commands TASK-001 --dry-run
 wep task migrate-criteria
 wep task migrate-criteria TASK-001 --dry-run
 wep task rm TASK-001
@@ -186,11 +216,27 @@ acceptance-criteria.md
 review-checklist.md
 ```
 
-Workflow is chosen automatically from the task description unless overridden with `--workflow`.
+A concrete project default wins unless overridden with `--workflow`. With `task-fit`, the CLI recommends a workflow from hard-coded English keywords; it does not execute `workflowRules`. `UI review` can be recommended but is not accepted by `--workflow`. See [WORKFLOWS.md](WORKFLOWS.md#selection-rules-and-limits).
 
-`wep task list` prints all task capsules with their descriptions. `wep task show TASK-001` prints every file in the capsule and the declared workflow. It reads the workflow from `## Workflow` in `plan.md` first, then from `## Recommended Workflow` in `task.md`. `wep task rm TASK-001` removes the capsule directory.
+`wep task list` prints all task capsules with their descriptions. `wep task show TASK-001` prints the five canonical Markdown files in the capsule and the declared workflow. It reads the workflow from `## Workflow` in `plan.md` first, then from `## Recommended Workflow` in `task.md`. `wep task rm TASK-001` removes the capsule directory immediately, including exports and sidecars; no `--force` is needed. Preview with `--dry-run`.
 
 `wep task migrate-criteria [TASK-ID]` adds an `AC-<n>` identifier to each criterion that has none, in one capsule or in all of them. It never changes a valid identifier, and it never reuses a number that a `Retired: AC-<n>` footer line retires. It writes nothing to a capsule with a duplicate or malformed identifier. It reports that capsule and exits with code 1 after it processes the others. `--dry-run` reports the plan.
+
+### Search, continuation, and validation approval
+
+`task search <query>` performs a literal, case-insensitive search of the five canonical
+capsule files. It ignores exports, logs, and symbolic links and applies blocked-read
+patterns. `--json` returns task, file, line, and text records.
+
+`task continuation <taskId>` reads an optional `continuation.json`. It does not resume
+work or authorize commands. See [CONTINUATION.md](CONTINUATION.md).
+
+`task approve-commands <taskId>` displays the commands declared under `## Validation`
+in `task.md` and stores approval of their ordered SHA-256 digest locally. It does not
+run them. Interactive approval asks after showing the list. In headless use, pass
+`--approve-commands '<exact command>'` once per command, in declared order. Inspect
+commands before approving them. Changing that list invalidates the stored approval.
+See [JUDGE.md](JUDGE.md) for execution modes and receipts.
 
 ---
 
@@ -205,13 +251,13 @@ wep compile TASK-001 --target claude
 wep compile TASK-001 --target all
 ```
 
-Concatenates task.md + context.md + plan.md + acceptance-criteria.md into:
+Concatenates task.md + context.md + plan.md + acceptance-criteria.md + review-checklist.md into:
 
 ```
 .wep/tasks/TASK-001/exports/<target>.md
 ```
 
-`--target all` compiles one brief for every target listed in `.wep/config.json`.
+`--target all` compiles one brief per configured target, or all four if no config exists. Without `--target`, compile uses `codex`; it does not read `defaults.target`. The real capsule directory includes its slug. Exports are derived files and are regenerated on every run; use `--dry-run` to preview.
 
 Paste or reference this file in your agent session when you need a deterministic brief.
 
@@ -241,7 +287,7 @@ Valid `contextBudget` values: `minimal` | `proportional` | `thorough`.
 
 ## `wep comprehension`
 
-Installs and manages the optional independent developer-understanding agent. The primary agent asks before invoking it; when the judge is enabled, comprehension begins only after an APPROVED review for the same change boundary.
+Installs and manages the optional independent developer-understanding agent. The developer requests a checkpoint after it is surfaced through `wep status`; when the judge is enabled, comprehension begins only after an APPROVED, current review for the same change boundary.
 
 ```bash
 wep comprehension enable
@@ -251,13 +297,13 @@ wep comprehension status
 
 Personal sessions are stored under `.wep/local/comprehension/` and ignored by Git. Read-only Git inspection is allowed; Git mutations and merge control are forbidden.
 
-Supported native agents: Codex, Claude Code, and GitHub Copilot. Pi is skipped because it has no native independent-agent surface.
+Supported native agents: Codex, Claude Code, and GitHub Copilot. Wepwawet does not generate native independent-agent files for Pi.
 
 ---
 
 ## `wep judge`
 
-Manages the optional judge subagent. The judge independently reviews whether an implementation matches the task capsule. Disabled by default.
+Manages the optional judge subagent. The judge independently reviews whether an implementation matches the task capsule. Enabled by normal full init for supported hosts.
 
 ```bash
 wep judge enable           # enable + install agent files for installed targets
@@ -265,7 +311,8 @@ wep judge enable --dry-run # preview files that would be created
 wep judge disable          # disable (files are kept, remove manually if needed)
 wep judge status           # show enabled state and which agent files exist
 wep judge snapshot TASK-001 --base main --json
-wep judge scope TASK-001 --base main --candidate WORKTREE --json
+wep judge scope TASK-001 --base main --candidate SNAPSHOT:<id> --json
+wep judge run TASK-001 --candidate SNAPSHOT:<id> --json
 wep judge verify .wep/local/judge/TASK-001/review.json --run-tests
 wep judge current .wep/local/judge/TASK-001/review.json
 wep judge snapshot TASK-001 --from-review .wep/local/judge/TASK-001/review.json
@@ -277,8 +324,7 @@ wep judge reproduce TASK-001 --base main --candidate SNAPSHOT:<id>
 ```
 
 `snapshot` captures a shallow immutable local boundary without changing live Git state.
-`scope` hashes the task capsule and exact code boundary. `verify --run-tests` re-executes
-declared passing validation in a disposable workspace. `current` separates historical
+`scope` hashes the task capsule and exact code boundary. `run` executes declared validation once and writes a receipt; it uses the live working tree by default or a disposable copy with `--isolated`. `verify --receipt-digest <digest>` checks the receipt observed by the trusted caller; `verify --run-tests` re-executes validation in a disposable copy. Both execution paths require approval of the declared commands. `current` separates historical
 approval validity from live applicability, catch-up reviews only the newer delta, and
 `prune` is dry-run-first local retention.
 
@@ -320,7 +366,7 @@ when the change is not reproduced.
 | `--approve-commands <cmd>` | Approve one command. Repeat once per command, in the printed order. Needed when no terminal is attached. |
 | `--json` | Emit JSON on stdout. The approval text goes to stderr. |
 
-Pi is not supported — it has no native subagent API.
+The native judge agent is not supported for Pi; workflow prompts and skills remain available.
 
 See [JUDGE.md](JUDGE.md) for the full flow including how to set a model.
 
@@ -369,6 +415,27 @@ lead agent decides when to delegate.
 
 ---
 
+## `wep trace`
+
+Opt into local session observations and inspect the resulting reports:
+
+```bash
+wep trace enable --dry-run
+wep trace enable
+wep trace status --json
+wep trace report --json
+wep trace disable
+```
+
+Tracing starts off. Enable wires hooks for installed targets and pins them to the
+current built CLI. The trace is observational and fail-open; it does not approve or
+block tools. Records remain local under `.wep/local/traces/`. Disable removes owned
+hook entries and retains previous records. Host event coverage varies; unsupported or
+unverified observations must not be treated as proof of conformance. See
+[TRACING.md](TRACING.md) for recorded fields, hook files, report predicates, and limits.
+
+---
+
 ## `wep remove`
 
 Removes wep harness files for a target.
@@ -376,18 +443,46 @@ Removes wep harness files for a target.
 ```bash
 wep remove --target codex              # dry-run: list what would be removed
 wep remove --target codex --force      # remove codex skill files
-wep remove --all --force               # remove .wep/ and all target files
+wep remove --target all --force        # target files only; keep shared .wep/
+wep remove --all --force               # remove harness; keep task/local records
+wep remove --all --purge-tasks --purge-local --force  # also delete those records
 ```
 
-Protected root instruction files (AGENTS.md, CLAUDE.md, copilot-instructions.md, and .pi/README.md) are always skipped — remove them manually if needed.
+Protected root instruction files (`AGENTS.md`, `CLAUDE.md`, `copilot-instructions.md`, and `.pi/README.md`) are always skipped; remove them manually if needed. Target removal includes generated agent files and removes owned trace hooks. `--all` retains task capsules and local personal records by default; purge flags explicitly opt into deleting those records. It also removes the local review guard. Preview before applying.
 
 ---
 
-## Common flags
+## `wep migrate`
 
-| Flag | Effect |
-|---|---|
-| `--target <target>` | `codex` \| `claude` \| `copilot` \| `pi` \| `all` |
-| `--dry-run` | Show planned writes without creating files |
-| `--force` | Update wep-owned files that already exist |
-| `--json` | Emit JSON output for scripting |
+Moves a legacy `.akrctx/` installation to `.wep/` and updates supported namespace
+references. Existing destinations are not merged or overwritten.
+
+```bash
+wep migrate --dry-run --json
+wep migrate
+```
+
+Review the preview first. A collision, symbolic link, or unsafe layout stops migration.
+Local judge/comprehension records and snapshots retain their original bytes and can
+retain legacy names. Migration does not renew a historical approval. See
+[security and merge rules](SECURITY_AND_MERGE_RULES.md).
+
+---
+
+## Flags and scripting
+
+Use `wep <command> --help` for the flags accepted by that command. Shared option names
+have command-specific semantics:
+
+| Flag | Behavior |
+| --- | --- |
+| `--target <target>` | Select a target where supported. Init and template operations support comma-separated targets; `all` selects all relevant targets. |
+| `--dry-run` | Preview supported writes. Read-only commands do not become different checks when this is present. |
+| `--force` | Init can overwrite non-protected generated files; remove/prune use it to apply deletion. Upgrade and template apply/update reject it. It is not a general approval flag. |
+| `--json` | Structured output on commands that implement it. Init/maintenance commands can still write files; JSON is not a read-only mode. |
+| `--help` | Display command-specific arguments and options. |
+
+Doctor `--ci`, incomplete upgrades, blocked template transactions, invalid continuation
+records, and failed judge verification can return nonzero status. Check exit status as
+well as JSON. `config show` prints JSON without needing `--json`; configuration writes
+accept `--dry-run`.

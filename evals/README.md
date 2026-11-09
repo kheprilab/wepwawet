@@ -1,8 +1,8 @@
 # Wepwawet evaluations
 
 This directory contains black-box evaluations for changes to the wep CLI.
-Unit tests prove implementation behavior. Evaluations prove what changed relative
-to a baseline and keep unproven value claims explicit.
+Unit tests check implementation behavior. Evaluations compare observed behavior with
+a baseline and keep unsupported value claims explicit.
 
 ## The loop
 

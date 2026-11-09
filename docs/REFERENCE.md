@@ -7,6 +7,9 @@ For installation and your first task, start with the [README](../README.md#quick
 - [Primary flow](#primary-flow)
 - [Project defaults](#project-defaults)
 - [What init creates](#what-init-creates)
+- [Target adapters](TARGETS.md)
+- [Task walkthrough](../TUTORIAL.md)
+- [Harness specification](HARNESS_SPEC.md)
 - [Context budget](#context-budget)
 - [Merge safety](#merge-safety)
 - [Applying templates](#applying-templates-after-init)
@@ -16,58 +19,41 @@ For installation and your first task, start with the [README](../README.md#quick
 
 ## Commands
 
-```bash
-wep init                             # detect agent and install harness
-wep init --target codex             # install for specific target
-wep init --target all               # install for all targets
-wep init --target copilot --profile regulated
-wep init --target copilot --template test-template
-wep doctor                          # audit setup, lint wiki, write readiness reports
-wep doctor --ci                     # fail CI when setup has actionable gaps
-wep doctor --fix                    # recreate missing files and repair config/policy gaps
-wep status                          # quick summary of installed targets and tasks
-wep upgrade                         # update harness files to current CLI version
-wep config show
-wep config set defaultWorkflow SDD+TDD
-wep task "Define invoice API examples" --workflow SDD+EDD
-wep task continuation TASK-001 --json
-wep task search "exact literal text"
-wep compile TASK-001 --target codex
-wep judge enable                    # install optional judge subagent
-wep judge status
-wep judge snapshot TASK-001 --base main --json
-wep judge scope TASK-001 --base main --candidate SNAPSHOT:<id> --json
-wep judge verify .wep/local/judge/TASK-001/review.json --run-tests
-wep judge current .wep/local/judge/TASK-001/review.json
-wep judge prune --keep 5            # preview; add --force to remove
-wep comprehension enable            # enable developer understanding checkpoints
-wep comprehension status
-wep trace enable                    # opt in to observational session tracing
-wep trace status
-wep trace report                    # human summary; unknown ordering is shown explicitly
-wep trace report --json             # per-session and aggregate contract-conformance metrics
-wep trace disable                   # remove only wep-owned hook entries
-wep remove --target codex --force   # remove harness for a target
-wep templates list                  # list bundled enterprise templates
-wep templates apply NAME            # apply bundled template after init
-wep templates apply ./pack --local  # apply local template after init
-wep templates status                # list applied templates and targets
-```
+Use `wep --help` for the command list and `wep <command> --help` for exact options.
+The [command guide](COMMANDS_AND_UX.md) explains routine usage and maintenance.
 
-Common flags:
+| Command | Purpose | Details |
+| --- | --- | --- |
+| `init` | Install adapters, profiles, and selected modules; optionally apply a pack | [Installation](INSTALLATION.md), [modules](CONFIGURATION.md#modules) |
+| `enable <modules>` | Add modules and their dependencies to an initialized project | [Command guide](COMMANDS_AND_UX.md#wep-enable) |
+| `templates list/apply/update/status` | Discover, apply, update, and inspect reusable packs | [Template packs](TEMPLATE_PACKS.md) |
+| `doctor` | Check setup and wiki integrity; write reports; repair missing files with `--fix`; use `--ci` for nonzero gap status | [Command guide](COMMANDS_AND_UX.md#wep-doctor) |
+| `status` | Show targets, tasks, defaults, agents, and active validation runs | [Command guide](COMMANDS_AND_UX.md#wep-status) |
+| `config show/set` | Read defaults or change supported defaults and agent settings | [Configuration](CONFIGURATION.md) |
+| `task create/list/show/rm` | Create a skeleton, inspect capsules, or remove one | [Command guide](COMMANDS_AND_UX.md#wep-task) |
+| `task search` | Search literal text in canonical capsule files | [Search](#search-task-capsules) |
+| `task continuation` | Read portable declared execution state | [Continuation](CONTINUATION.md) |
+| `task migrate-criteria` | Add stable `AC-<n>` identifiers to old criteria | [Command guide](COMMANDS_AND_UX.md#wep-task) |
+| `task approve-commands` | Pre-approve the exact ordered validation commands without executing them | [Judge](JUDGE.md) |
+| `compile` | Regenerate a single target brief from all five capsule files | [Command guide](COMMANDS_AND_UX.md#wep-compile) |
+| `judge enable/disable/status` | Manage independent review agents | [Judge](JUDGE.md) |
+| `judge snapshot/scope` | Capture immutable content and calculate the review boundary | [Judge](JUDGE.md) |
+| `judge run/verify/current` | Execute approved validation, check review records, and classify live applicability | [Judge](JUDGE.md) |
+| `judge reproduce` | Reproduce a declared mechanical migration against a snapshot | [Judge](JUDGE.md) |
+| `judge rounds/prune` | Inspect review rounds and preview or apply snapshot retention | [Judge](JUDGE.md) |
+| `impl enable/disable/start/log/status` | Manage the implementer and its local attempt log | [Implementer contract](HARNESS_SPEC.md#implementer-agent), [command guide](COMMANDS_AND_UX.md#wep-impl) |
+| `comprehension enable/disable/status` | Manage independent developer understanding checkpoints | [Comprehension](COMPREHENSION.md) |
+| `trace enable/disable/status/report` | Opt into local tracing and inspect session reports | [Tracing](TRACING.md) |
+| `upgrade` | Update unchanged generated files; preserve edits as merge candidates | [Command guide](COMMANDS_AND_UX.md#wep-upgrade) |
+| `migrate` | Move a legacy namespace to `.wep/` without overwriting destinations | [Command guide](COMMANDS_AND_UX.md#wep-migrate) |
+| `remove` | Preview or remove adapters and optional shared state | [Command guide](COMMANDS_AND_UX.md#wep-remove) |
 
-```bash
---target codex|claude|copilot|pi|all
---dry-run
---force
---json
-```
+`--dry-run`, `--force`, `--target`, and `--json` have command-specific meanings; they
+are not universal execution or permission switches. For example, removal requires
+`--force`, task deletion does not, and upgrade/template operations reject it.
 
-Task-only workflow override:
-
-```bash
---workflow fast-patch|research-first|SDD|TDD|EDD|SDD+TDD|SDD+EDD|TDD+EDD
-```
+Normal init enables the judge for supported hosts. Comprehension, the implementer,
+and tracing are opt-in. Module installation and agent enablement are separate settings.
 
 ## Primary Flow
 
@@ -119,7 +105,7 @@ More detail:
 
 ## What Init Creates
 
-Every target gets the neutral source of truth:
+A full init creates the following shared structure. Smaller module selections create only the files they need:
 
 ```txt
 .wep/
@@ -163,25 +149,20 @@ AGENTS.md or AGENTS.wep.suggested.md
 .agents/skills/wep-review/SKILL.md
 .agents/skills/wep-workflow/SKILL.md
 .agents/skills/wep-write-policy/SKILL.md
-.codex/agents/wep-comprehension.toml  # optional; created by comprehension enable
+.codex/agents/wep-judge.toml         # enabled by normal init
+.codex/agents/wep-comprehension.toml # opt-in: comprehension enable
+.codex/agents/wep-implementer.toml   # opt-in: impl enable
 ```
 
 Claude, Copilot, and Pi Code receive their own target adapters under `CLAUDE.md`, `.claude/`, `.github/`, or `.pi/`. Claude and Pi Code get `SKILL.md` workflow packages; Copilot gets repository instructions, skills, and reusable prompt files.
 
-### Agent Discovery in Claude Code
+### Agent discovery
 
-`wep judge enable`, `wep impl enable`, and `wep comprehension enable` write a
-subagent file to `.claude/agents/`. Claude Code watches that directory and picks up a new
-or edited file within a few seconds, with no restart.
-
-One case is different. Claude Code does not watch a directory that did not exist when the
-session started. On a first install, `enable` creates `.claude/agents/` for the first time.
-The agent is then not spawnable in that session, and `Agent({ subagent_type:
-"wep-judge" })` reports that the agent type is not found.
-
-Restart Claude Code to fix it. Every session you start after the first `enable` finds the
-agent. `enable` prints this notice only when it creates the directory, so a notice you do
-not see means the watcher already has the file.
+Judge, implementer, and comprehension commands write native files under each host's
+agent directory. Wepwawet does not launch them or control when the host reloads them.
+If Claude Code cannot find an agent after the first creation of `.claude/agents/`,
+restart the session. Enable commands print a discovery notice when creating that
+directory. See [target adapters](TARGETS.md) for all generated paths.
 
 ## Context Budget
 
@@ -197,6 +178,8 @@ agent instruction audit -> .wep/wiki/instruction-audit.md
 wiki catalog      -> .wep/wiki/index.md
 task capsules     -> .wep/tasks/TASK-XXX/
 personal comprehension records -> .wep/local/comprehension/ (Git-ignored)
+implementation attempt logs -> .wep/local/impl/TASK-XXX/log.md (Git-ignored)
+judge records and snapshots -> .wep/local/judge/ (Git-ignored)
 compiled briefs   -> .wep/tasks/TASK-XXX/exports/
 decisions         -> .wep/wiki/decisions.md
 architecture      -> .wep/wiki/architecture.md
@@ -231,7 +214,7 @@ Packs are applied sequentially, so a project may compose several. Blocking file 
 
 `policy.json` (`blockedReadPatterns`, `protectedFiles`, `protectedFileMerge`, `enforcement.*`) and the write-policy skill are **prompt-level / convention-level controls, not technical enforcement**. They give a cooperative coding agent clear instructions about what not to read or overwrite — including the exact human-approval exception for protected instruction merges — but they do not sandbox the agent or resist a malicious or compromised agent, prompt injection, or a template pack designed to weaken them.
 
-**One narrow exception.** `wep judge scope` enforces `blockedReadPatterns` mechanically rather than by instruction: matching paths are removed from the diff at the Git level, so their contents are never read, hashed, or shown to the judge, and an unusable `policy.json` stops the command instead of degrading to a default pattern set. Only their paths appear, in `scope.excludedPaths`. This applies to the judge boundary alone — everywhere else in wep the patterns remain advisory, and the paragraph above still governs. See [Judge](JUDGE.md).
+`wep judge scope` enforces `blockedReadPatterns` mechanically rather than by instruction: matching paths are removed from the diff at the Git level, so their contents are never read, hashed, or shown to the judge, and an unusable `policy.json` stops the command instead of degrading to a default pattern set. Only their paths appear, in `scope.excludedPaths`. Task search, continuation reads, and legacy migration also screen paths mechanically within their own operations. These command-specific checks do not restrict what the coding agent can read through its host tools; the paragraph above still governs those tools. See [Judge](JUDGE.md).
 
 Snapshot capture also removes blocked tracked paths from the reviewable worktree, but it
 is not secret-history rewriting or encryption: its private shallow Git repository still
@@ -240,7 +223,7 @@ contains candidate/base objects. Remove committed secrets from Git history separ
 Treat wep's policy as documentation the agent is expected to follow, not a security boundary. To actually restrict what an agent can read or write, complement it with:
 
 - Your coding agent's own permission system (e.g. Claude Code deny rules, sandboxed tool execution).
-- `.gitignore` / secret-scanning for anything under `blockedReadPatterns` (`.env`, `*.pem`, `credentials/`, etc.) so secrets are not present in the working tree at all.
+- Secret scanning and exclusion of credentials from version control. `.gitignore` can prevent accidental staging of untracked files, but it does not remove existing files or stop an agent from reading them.
 - Branch protection / code review for any change touching `.wep/policy.json` or a template pack, since both can relax enforcement (see `wep init`'s policy-weakening warning).
 
 ## Quality Gates
