@@ -21,7 +21,12 @@
   "engines": {
     "node": ">=20"
   },
-  "files": ["dist", "README.md", "LICENSE", "templates"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "templates"
+  ],
   "publishConfig": {
     "access": "public"
   },
