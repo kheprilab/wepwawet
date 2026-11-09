@@ -6,7 +6,6 @@ import { registerDoctor } from "./cli/doctor.js";
 import { registerImpl } from "./cli/impl.js";
 import { registerEnable, registerInit } from "./cli/init.js";
 import { registerJudge } from "./cli/judge.js";
-import { registerMigrate } from "./cli/migrate.js";
 import { registerRemove } from "./cli/remove.js";
 import { registerStatus } from "./cli/status.js";
 import { registerTask } from "./cli/task.js";
@@ -83,7 +82,6 @@ export function buildProgram(): Command {
   registerJudge(program);
   registerTrace(program);
   registerUpgrade(program);
-  registerMigrate(program);
   registerRemove(program);
 
   return program;

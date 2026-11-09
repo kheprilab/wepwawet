@@ -189,7 +189,7 @@ incomplete upgrade finished.
 
 Other capabilities have separate guides:
 
-- [Command guide](docs/COMMANDS_AND_UX.md): all command groups, task search, command approval, migration, and removal.
+- [Command guide](docs/COMMANDS_AND_UX.md): all command groups, task search, command approval, and removal.
 - [Template packs](docs/TEMPLATE_PACKS.md): applying and updating team conventions and custom target agents.
 - [Tracing](docs/TRACING.md): opt-in local observations and session reports.
 - [Continuation](docs/CONTINUATION.md): portable declared state; the reader does not resume execution.

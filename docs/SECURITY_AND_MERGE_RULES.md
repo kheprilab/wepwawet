@@ -102,17 +102,11 @@ blocked-read patterns. Its instructions forbid Git mutations. Personal responses
 `.wep/local/`, with ignored and untracked status verified before persistence. Ignore rules do
 not encrypt records or prevent accidental sharing outside Git.
 
-## Template packs, migration and removal
+## Template packs and removal
 
 Packs can add agent instructions and merge configuration or policy. A weakening warning is
 not a rejection or a trust guarantee. Pack apply/update conflict handling differs from init;
 see [Template packs](TEMPLATE_PACKS.md).
-
-`wep migrate --dry-run` previews a legacy `.akrctx/` installation's move to `.wep/`. Migration
-rejects a pre-existing destination rather than combining both trees. It checks blocked paths,
-symlinks, collisions and provenance before writing. Local judge and comprehension trees keep
-their original bytes; migration does not renew an old review approval. Inspect the migration
-diff, then run Doctor.
 
 `wep remove` previews by default; deletion requires `--force`. It preserves protected root
 instructions. `--all` preserves task capsules and local records unless `--purge-tasks` and

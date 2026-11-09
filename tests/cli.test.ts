@@ -67,6 +67,18 @@ function captureHelp(args: string[]): string {
 }
 
 describe("CLI help snapshots", () => {
+  it("exposes only criterion migration, with no top-level namespace migration command", async () => {
+    const program = buildProgram();
+    program.exitOverride().configureOutput({ writeErr: () => {} });
+    expect(program.commands.some((command) => command.name() === "migrate")).toBe(false);
+    expect(
+      program.commands
+        .find((command) => command.name() === "task")
+        ?.commands.some((command) => command.name() === "migrate-criteria"),
+    ).toBe(true);
+    await expect(program.parseAsync(["node", "wep", "migrate"])).rejects.toThrow("unknown command");
+  });
+
   it("root --help matches snapshot", () => {
     expect(captureHelp(["--help"])).toMatchSnapshot();
   });
@@ -84,7 +96,6 @@ describe("CLI help snapshots", () => {
     "judge",
     "trace",
     "upgrade",
-    "migrate",
     "remove",
   ];
   it.each(subcommands)("%s --help matches snapshot", (subcommand) => {

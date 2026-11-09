@@ -106,4 +106,4 @@ Use `wep judge status` to inspect the resolved state or `wep judge disable` to t
 | Update harness to latest | `wep upgrade` |
 | Remove harness | `wep remove --target codex --force` |
 
-See the [command guide](COMMANDS_AND_UX.md) for modules, command approval, task search, templates, tracing, continuation, migration, and removal options.
+See the [command guide](COMMANDS_AND_UX.md) for modules, command approval, task search, templates, tracing, continuation, and removal options.

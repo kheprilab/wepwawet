@@ -196,21 +196,6 @@ Commands:
 "
 `;
 
-exports[`CLI help snapshots > migrate --help matches snapshot 1`] = `
-"Usage: wep migrate [options]
-
-Move a legacy installation to the .wep namespace.
-
-Options:
-  --dry-run   show planned changes without writing files (default: false)
-  --json      emit the migration result as JSON (default: false)
-  -h, --help  display help for command
-
-Existing destinations are never merged or overwritten.
-Local review records and snapshots retain their original bytes and may retain legacy names.
-"
-`;
-
 exports[`CLI help snapshots > remove --help matches snapshot 1`] = `
 "Usage: wep remove [options]
 
@@ -282,7 +267,6 @@ Commands:
                               honored in a session.
   upgrade [options]           Update wep-owned harness files to the current CLI
                               version.
-  migrate [options]           Move a legacy installation to the .wep namespace.
   remove [options]            Remove wep harness files for a target.
   help [command]              display help for command
 
