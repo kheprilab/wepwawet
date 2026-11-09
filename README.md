@@ -85,6 +85,8 @@ available for scripts and headless use.
 See [installation details](docs/INSTALLATION.md) for updates and building from source,
 or follow the [task walkthrough](TUTORIAL.md) through implementation and review.
 
+**Older harnesses:** initialize a fresh Wepwawet installation, then manually transfer project notes and task context you have reviewed. Regenerate agent adapters and validation evidence instead of carrying over old generated files, review snapshots, or approvals.
+
 ## How it works
 
 1. **Install the harness.** `init` creates shared context, task templates, and agent
@@ -132,7 +134,7 @@ generated file layout, task search, continuation, templates, and maintenance.
 | [Judge](docs/JUDGE.md) | Independent review, snapshots, and verification |
 | [Comprehension](docs/COMPREHENSION.md) | Developer understanding checkpoints |
 | [Tracing](docs/TRACING.md) | Optional session tracing and reports |
-| [Command guide](docs/COMMANDS_AND_UX.md) | Every command group, task tools, migration, and removal |
+| [Command guide](docs/COMMANDS_AND_UX.md) | Every command group, task tools, and removal |
 | [Targets](docs/TARGETS.md) | Generated files and platform differences |
 | [Continuation](docs/CONTINUATION.md) | Portable declared execution state |
 | [Harness specification](docs/HARNESS_SPEC.md) | Task capsules, evidence, review, and [implementer](docs/HARNESS_SPEC.md#implementer-agent) contracts |

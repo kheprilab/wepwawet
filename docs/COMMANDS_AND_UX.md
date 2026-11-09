@@ -452,23 +452,6 @@ Protected root instruction files (`AGENTS.md`, `CLAUDE.md`, `copilot-instruction
 
 ---
 
-## `wep migrate`
-
-Moves a legacy `.akrctx/` installation to `.wep/` and updates supported namespace
-references. Existing destinations are not merged or overwritten.
-
-```bash
-wep migrate --dry-run --json
-wep migrate
-```
-
-Review the preview first. A collision, symbolic link, or unsafe layout stops migration.
-Local judge/comprehension records and snapshots retain their original bytes and can
-retain legacy names. Migration does not renew a historical approval. See
-[security and merge rules](SECURITY_AND_MERGE_RULES.md).
-
----
-
 ## Flags and scripting
 
 Use `wep <command> --help` for the flags accepted by that command. Shared option names
