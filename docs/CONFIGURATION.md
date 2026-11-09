@@ -8,6 +8,52 @@ wep stores project defaults in:
 
 The config is shared by the CLI and the installed agent harness.
 
+## Modules
+
+A normal `wep init --target codex` installs every module. Select a smaller installation
+with `--modules`, then add modules later with `wep enable`:
+
+```bash
+wep init --target codex --modules templates
+wep enable tasks
+wep enable judge,comprehension --dry-run
+```
+
+| Module | Includes | Dependencies |
+| --- | --- | --- |
+| `templates` | Config, manifest, template application support | None |
+| `tasks` | Wiki, task templates, target workflow instructions and skills | `templates` |
+| `judge` | Policy, review contract, and enabled judge agent files | `tasks`, `templates` |
+| `comprehension` | Comprehension contract and schemas | `judge`, `tasks`, `templates` |
+| `impl` | Availability of the implementer module | `tasks`, `templates` |
+| `trace` | Availability of tracing | `templates` |
+
+Dependencies are included automatically. Omitting `modules` from the config means all
+modules, for compatibility with older full installations. `wep enable` adds modules;
+there is no general module-disable command. Module availability does not turn on
+comprehension, the implementer, or tracing. Use their specific `enable` commands.
+Normal init enables the judge; a new installation without the judge module disables it.
+Pi receives workflow files but has no native agent definitions.
+
+## Default state
+
+A new full installation uses `task-fit`, every selectable workflow, required task
+capsules and workflow reasons, and proportional context loading. Judge is enabled;
+comprehension, the implementer, and tracing are disabled. Existing project settings or
+a template pack can change these values. `agents.<name>` overrides the older agent
+settings when both exist; inspect resolved state with `wep judge status`,
+`wep comprehension status`, or `wep impl status TASK-001`.
+
+## Reading and repairing configuration
+
+Most commands reject invalid JSON, a non-object config, or a config with no recognized
+target. `doctor` reports these defects for diagnosis. Repair or restore invalid config
+before rerunning `init` or `doctor --fix`: init currently treats an unreadable config as
+absent when planning files. Without `--force`, syntax-invalid JSON can remain unchanged
+while a default full harness is created around it; `init --force` can replace it with
+defaults. Doctor repair can also create default files around an invalid config. `config show` normalizes recognized fields and fills
+missing defaults in its output; it is not a byte-for-byte dump of the file.
+
 ## Show Config
 
 ```bash
@@ -28,7 +74,7 @@ wep config set contextBudget proportional
 
 ## Workflow Default
 
-Use `task-fit` for most projects. It tells the agent to choose the smallest suitable workflow for each task.
+With `task-fit`, the agent is instructed to choose the smallest suitable workflow for each task. The CLI fallback uses keyword recommendations; see [selection rules](WORKFLOWS.md#selection-rules-and-limits).
 
 Use a concrete workflow when the whole project should bias toward that process unless a task overrides it.
 
@@ -45,7 +91,7 @@ Use a concrete workflow when the whole project should bias toward that process u
 
 ## Allowed Workflows
 
-`defaults.allowedWorkflows` restricts which workflows the agent (and the CLI `wep task`) may use. By default it includes every workflow.
+`defaults.allowedWorkflows` restricts which workflows the agent (and the CLI `wep task`) may use. By default it includes every selectable workflow. `UI review` is a task-level recommendation outside that list; the CLI does not filter it with `allowedWorkflows`.
 
 ```bash
 wep config set allowedWorkflows SDD,TDD
@@ -90,9 +136,9 @@ wep comprehension status
 wep comprehension disable
 ```
 
-When enabled, the primary agent asks permission to invoke `wep-comprehension`. If the judge is enabled, the primary agent first offers the judge, saves its structured record locally, and runs `wep judge verify`. Comprehension independently repeats that verification and starts only for an APPROVED record bound to the current task and code. It then reconstructs the change, skips surface-only work, renders a change map and test matrix, and conducts a short interactive checkpoint for meaningful logic, architecture, security, persistence, infrastructure, or other material risks.
+When enabled, checkpoints are surfaced asynchronously through `wep status`; the primary agent invokes `wep-comprehension` when the developer requests a checkpoint. If the judge is enabled, the primary agent first obtains the automatic independent review, saves its structured record locally, and verifies it with the digest observed from `wep judge run`. Comprehension independently checks the record with plain verification and current-boundary classification; it does not re-execute validation or authenticate the receipt digest. It starts only for an independent APPROVED record bound to the current task and code. It then reconstructs the change, skips surface-only work, renders a change map and test matrix, and conducts a short interactive checkpoint for meaningful logic, architecture, security, persistence, infrastructure, or other material risks.
 
-The handoff is deliberately narrow: task ID, exact base/candidate boundary, and judge verdict. The implementing agent must not provide its explanations, proposed questions, expected answers, or conclusions. See [COMPREHENSION.md](COMPREHENSION.md) for the full protocol and platform differences.
+The handoff is deliberately narrow: task ID, exact base/candidate boundary, and verified judge-record path. The implementing agent must not provide its explanations, proposed questions, expected answers, or conclusions. See [COMPREHENSION.md](COMPREHENSION.md) for the full protocol and platform differences.
 
 Personal answers, hints, and results belong in `.wep/local/comprehension/TASK-XXX/<session-id>/`. The installed `.wep/local/.gitignore` keeps new records out of version control by default. Before persistence, the agent verifies the path with read-only Git commands; if it cannot verify this, it keeps the interaction in chat. Git ignore rules are not encryption and do not protect files from other local software or backups.
 
@@ -192,7 +238,7 @@ Wiki pages, tasks, local records, and root agent instructions are project-owned 
 
 ## Judge
 
-The judge is an optional subagent that independently reviews implementation against the task capsule. It is disabled by default.
+The judge independently reviews implementation against the task capsule. Normal full init enables it for Codex, Claude Code, and Copilot. It can be disabled. The installed workflow invokes it automatically after implementation within the approved task contract; the initial Approval Brief covers the workflow, acceptance criteria, and exact validation commands.
 
 ```bash
 wep judge enable   # install judge files and set enabled: true
@@ -204,13 +250,16 @@ wep judge verify .wep/local/judge/TASK-001/review.json --run-tests
 wep judge current .wep/local/judge/TASK-001/review.json
 ```
 
-The normal concurrent workflow captures `wep judge snapshot TASK-001 --base <ref>`,
-reviews its `SNAPSHOT:<id>` candidate, verifies with `--run-tests`, and then uses
-`wep judge current <review.json>` to classify live applicability. Catch-up uses
-`judge snapshot --from-review <review.json>`. Local snapshots are ignored and can be
+The normal workflow captures `wep judge snapshot TASK-001 --base <ref>`, runs approved
+validation once with `wep judge run TASK-001 --candidate SNAPSHOT:<id>`, and gives the
+receipt to the independent judge. The trusted caller verifies with
+`wep judge verify <review.json> --receipt-digest <digest-observed-from-run>`, then uses
+`wep judge current <review.json>` to classify live applicability. `verify --run-tests`
+is a separate fresh-run option. Catch-up uses `judge snapshot --from-review <review.json>
+--receipt-digest <digest>`. Local snapshots are ignored and can be
 preview-pruned with `wep judge prune --keep <n>`; add `--force` to apply deletion.
 
-The enabled state is stored in config:
+A disabled legacy judge setting looks like this (a new full init uses `true`):
 
 ```json
 {
@@ -247,17 +296,17 @@ trigger, which hosts they are emitted for, and which model each host runs them w
 }
 ```
 
-It holds exactly three entries — `judge`, `comprehension`, `implementer` — and no others.
-A project cannot declare an agent of its own here, because each of the three is
-trustworthy only through a CLI contract behind it (`judge verify --run-tests`, the
-comprehension schemas, the `wep impl` attempt store). An entry with no command behind
-it would be an agent wep generates and cannot vouch for.
+The CLI recognizes three built-in entries: `judge`, `comprehension`, and `implementer`.
+Unknown entries are preserved as JSON values and reported as warnings, but are not
+generated or invoked. Template-pack custom agents use a separate format; see
+[TEMPLATE_PACKS.md](TEMPLATE_PACKS.md).
 
-Every field is optional. An absent field falls back to the built-in default.
+Every field is optional. Resolution uses the canonical field first, then its legacy
+setting when present, then the built-in fallback.
 
 | Field | Meaning |
 | --- | --- |
-| `enabled` | Whether the agent is emitted and offered. Default `false`. |
+| `enabled` | Whether the agent is enabled for its installed workflow. Fallback `false` when neither canonical nor legacy state exists; normal init supplies legacy judge `true`. |
 | `trigger` | A scheduling hint for the lead agent / host. Recognized values and behavior depend on the agent; see the implementer semantics below. Unknown values remain warnings. |
 | `targets` | Narrows emission to a subset of the installed targets. |
 | `model` | Per target: `{ "claude": …, "codex": …, "copilot": … }`. |
@@ -279,9 +328,10 @@ The lead agent reads the resolved implementer state from `wep impl status TASK-X
 it must not duplicate canonical/legacy precedence by reading a raw config key. When the
 resolved implementer is disabled, it is neither offered nor started. With `on-request`, the
 handoff is offered only after the user asks to use the implementer. With
-`post-clarification`, it is offered after the capsule is ready and clarifications are
-resolved. Both paths require explicit human confirmation before delegation. wep does not
-schedule or fire an agent automatically.
+`post-clarification`, approval of the initial Approval Brief is the explicit confirmation
+to start implementation and delegate; the agent should not ask a second time. An
+`on-request` handoff requires the explicit request and confirmation. The CLI does not
+schedule or fire an agent; these are instructions for the lead agent.
 
 Unknown trigger values remain warnings. They never invent an automatic invocation; the lead
 agent waits for an explicit user request and confirmation.
@@ -294,11 +344,11 @@ propagated exactly as configured, and reported by `enable`, `doctor`, `upgrade`,
 an agent invoked, and it does not have any provider's model catalogue, so refusing an
 unfamiliar value would block legitimate work to catch a typo.
 
-`agents.implementer.maxAttempts` is the one error. Its domain is fully known, and an
-unparseable budget would resolve to "no limit" — the exact failure the budget prevents.
+Unlike unfamiliar model or trigger strings, an invalid `agents.implementer.maxAttempts` is an error. Its domain is fully known, and an
+unparseable budget must not silently grant a fresh allowance.
 
 An entry wep does not recognize is also a warning. It is ignored for resolution and
-preserved in the file byte for byte, so a configuration written by a newer wep that
+preserved as an unknown JSON value, so a configuration written by a newer wep that
 knows a fourth agent neither disables an older CLI nor loses its settings the next time
 that CLI writes the file.
 
@@ -313,8 +363,8 @@ Codex, and Copilot are the three supported agent hosts.
 
 ### Compatibility with `judge`, `comprehensionGate`, and `impl`
 
-The older keys keep working. `normalizeConfig` maps them onto the `agents` shape in memory,
-reading a legacy config never rewrites it, and `wep upgrade` neither migrates nor deletes
+The older keys keep working. Agent resolution reads them when a canonical field is absent;
+reading a legacy config does not rewrite it, and `wep upgrade` neither migrates nor deletes
 them. When a command changes an agent setting it writes `agents.<name>` and keeps an
 existing legacy key in step, so an older wep reading the same file still behaves the same.
 
@@ -353,16 +403,19 @@ used — an untrustworthy log must not grant a fresh budget.
 
 ---
 
-## Full config.json shape
+## Example config.json
+
+This example includes optional canonical agent entries. It is not the exact output
+of every init; installedVersion is managed by the CLI.
 
 ```json
 {
   "version": 1,
-  "installedVersion": "0.3.0",
+  "installedVersion": "0.8.0",
   "profile": "default",
   "targets": ["codex"],
   "judge": {
-    "enabled": false,
+    "enabled": true,
     "trigger": "post-implementation"
   },
   "comprehensionGate": {
@@ -371,7 +424,7 @@ used — an untrustworthy log must not grant a fresh budget.
     "evaluationMode": "prefer-independent"
   },
   "agents": {
-    "judge": { "enabled": false, "model": { "claude": "opus" } },
+    "judge": { "enabled": true, "model": { "claude": "opus" } },
     "comprehension": { "enabled": false },
     "implementer": { "enabled": false, "maxAttempts": 3 }
   },
@@ -393,3 +446,13 @@ used — an untrustworthy log must not grant a fresh budget.
   }
 }
 ```
+
+
+`config set` accepts the six short default keys shown above and their dotted aliases
+(`defaults.workflow`, `defaults.target`, `defaults.allowedWorkflows`,
+`defaults.requireTaskCapsule`, `defaults.requireWorkflowReason`, `defaults.contextBudget`).
+For built-in agents it accepts `enabled`, `trigger`, `targets`, and
+`model.<codex|claude|copilot>`; only the implementer accepts `maxAttempts`.
+Other fields such as `workflowRules` and profile policy require deliberate file edits.
+Changing an agent model or enabled setting with `config set` does not itself install
+or regenerate native agent files; run the corresponding enable command or `wep upgrade`.

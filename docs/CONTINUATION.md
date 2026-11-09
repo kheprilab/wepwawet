@@ -79,7 +79,7 @@ of a particular local snapshot is different from content identity across checkou
 (`portable-summary`, `legacy-local-log`, `unknown`) and `localReconciliation`
 (`not-available`, `reconciled`, `conflict`). A count above the limit is retained as exhausted
 history, not silently clamped. Reading without local logs neither resets the budget nor
-corroborates it. Reconciliation and reservation are separate future operations.
+corroborates it. The reader does not reconcile local logs or reserve an attempt.
 
 `validationSummary` contains `contractDigest`, `codeReviewContentDigest` (digest or null),
 `required` (an array of `{ "command": "…", "status": "passed|failed|not-run" }` objects),
@@ -97,7 +97,8 @@ is rejected, never truncated on read.
 ## Limits, privacy and compatibility
 
 Schema v1 rejects unknown fields at every object level. Free strings are at most 1,024 characters;
-ordinary arrays are at most 100 entries. Digests use `sha256:` plus 64 lowercase hexadecimal
+ordinary arrays are at most 100 entries. Free strings must be non-empty; explanatory
+`reason` fields must also contain non-whitespace text. Digests use `sha256:` plus 64 lowercase hexadecimal
 characters. Git commits are null or 40/64 lowercase hexadecimal characters. Numbers and enums
 are not coerced from strings or arrays.
 
@@ -107,7 +108,19 @@ prevent adding arbitrary permission/log fields, but cannot detect secrets embedd
 Producers are responsible for reviewing what they make portable. JSON output includes the valid
 record; terminal output shows only structural status and reasons.
 
-This initial reader does **not** change judge or snapshot rules. Until the separate review-boundary
-integration is implemented, `continuation.json` still participates in the existing code-change
-boundary like other repository files. Do not assume updating it preserves a current approval.
+## Judge boundary and execution metadata
+
+A regular `continuation.json` accepted as `valid` for the reviewed task is excluded from the
+snapshot's `reviewContentDigest` and `reviewWorkspaceDigest`. Its bytes remain in the full
+`contentDigest` and `workspaceDigest`; modifying a sidecar inside an immutable snapshot still
+fails integrity verification. An invalid, unsupported or irregular sidecar is not excluded from
+reviewable content.
+
+`wep judge current` separates the whole workspace `status` from `reviewBoundary` and reports
+`executionMetadata` as `ABSENT`, `UNCHANGED`, `CREATED`, `REMOVED` or `ADVANCED`. Creating,
+removing or updating only a valid sidecar can make whole-workspace status `NEWER_CHANGES`
+while leaving `reviewBoundary` `CURRENT`. A code change alongside it still changes the review
+boundary. These labels describe content comparison; they do not authorize resumption or prove
+the sidecar's execution claims. See [Judge](JUDGE.md).
+
 The five canonical capsule documents and their digest calculation are unchanged.

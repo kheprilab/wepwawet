@@ -1,25 +1,18 @@
 # Quickstart
 
-Get wep running in a project in under five minutes.
+Install the harness, prepare project context, and give your agent its first task.
 
 ## 1. Install
 
-wep is not on npm yet. Build and link it from source:
+Requires Node.js 20+, npm, Git, and a supported coding agent.
 
 ```bash
-git clone <repo-url>
-cd wep
-pnpm install
-pnpm build
-pnpm link --global
-```
-
-Verify:
-
-```bash
+npm install -g wepwawet
 wep --version
 wep --help
 ```
+
+For development builds, see [building from source](INSTALLATION.md#build-from-source).
 
 ## 2. Init in your project
 
@@ -30,7 +23,7 @@ cd /path/to/your-project
 wep init
 ```
 
-wep detects your existing agent setup (Codex, Claude Code, Copilot, Pi) and asks you to confirm. If nothing is detected, it asks which agent you use.
+wep detects existing agent setup (Codex, Claude Code, Copilot, Pi). One detected target is selected directly. With none or several, it asks which target to install in an interactive terminal; pass `--target` for headless use.
 
 To skip the prompt:
 
@@ -56,7 +49,7 @@ After init, open your coding agent in the project and ask:
 Run wep doctor.
 ```
 
-The agent reads the installed harness, audits the setup, and populates `.wep/wiki/` with project context. This is the step that turns a skeleton into a working harness.
+Ask it to use the installed `wep-doctor` workflow. The agent inspects relevant project files and records verified architecture, conventions, testing commands, and decisions in `.wep/wiki/`. If init wrote a root-instruction suggestion, review and merge it first.
 
 You can also run the CLI doctor to get a readiness score and suggested next prompt:
 
@@ -72,7 +65,7 @@ Ask your agent directly — no CLI needed:
 Fix the login bug where the session expires too early.
 ```
 
-The agent reads `AGENTS.md` (or equivalent), creates a task capsule in `.wep/tasks/`, chooses the right workflow (TDD for bugs), and implements.
+The harness instructs the agent to read `AGENTS.md` (or its target equivalent), clarify material ambiguity, create a task capsule in `.wep/tasks/`, select a workflow, and implement. The built-in bug-fix recommendation is TDD; a concrete project default or explicit request can change it.
 
 Or create a skeleton capsule via CLI (useful for CI or scripting):
 
@@ -88,15 +81,15 @@ wep status
 
 Shows installed targets, task count, and current workflow default.
 
-## Optional: enable the judge
+## Independent review
 
-The judge is an independent subagent that reviews implementation against the task capsule. It is disabled by default.
+Normal init enables the judge for Codex, Claude Code, and Copilot. After you approve the initial task brief, the installed workflow invokes it automatically after implementation. The brief covers the selected workflow, acceptance criteria, and exact validation commands. If your installation disabled it or omitted its module, enable it with:
 
 ```bash
 wep judge enable
 ```
 
-See [JUDGE.md](JUDGE.md) for the full flow.
+Use `wep judge status` to inspect the resolved state or `wep judge disable` to turn it off. Comprehension, the implementer, and tracing are separate opt-ins. See [JUDGE.md](JUDGE.md) for snapshot capture, command approval, validation receipts, and verified review records.
 
 ## Reference
 
@@ -112,3 +105,5 @@ See [JUDGE.md](JUDGE.md) for the full flow.
 | Enable judge | `wep judge enable` |
 | Update harness to latest | `wep upgrade` |
 | Remove harness | `wep remove --target codex --force` |
+
+See the [command guide](COMMANDS_AND_UX.md) for modules, command approval, task search, templates, tracing, continuation, migration, and removal options.

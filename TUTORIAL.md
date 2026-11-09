@@ -1,315 +1,201 @@
-# Wepwawet: disciplina de trabajo para agentes de código
+# Working on a task with Wepwawet
 
-*Cómo pasar de "el agente hace lo que le da la gana" a "el agente sigue tu proceso".*
+This walkthrough installs the harness, prepares project context, and takes a change
+through implementation and independent review. Wepwawet writes files and runs its
+own CLI operations; your coding agent performs the coding and review work.
 
----
+## 1. Install the CLI
 
-## El problema que resuelve
-
-Los agentes de código como Codex, Claude Code o GitHub Copilot son capaces de hacer cosas impresionantes, pero tienen un problema estructural: cada sesión empieza desde cero. Sin memoria entre sesiones, sin contexto de por qué existe un fichero, sin un proceso acordado de antemano. El agente adivina. A veces acierta, a veces no.
-
-**wep** es un CLI que instala un harness en tu repositorio: un conjunto de ficheros de instrucciones, plantillas y wikis que dan al agente una forma de trabajar consistente y documentada, independientemente del agente que uses.
-
-No es un agente. No llama a ninguna API. No tiene telemetría. Es simplemente un instalador que genera ficheros que el agente leerá en tu próxima sesión.
-
----
-
-## Instalación
-
-wep no está en npm todavía. Clona el repo y enlázalo de forma global:
+You need Node.js 20+, npm, Git, and a supported coding agent.
 
 ```bash
-git clone <repo-url>
-cd wep
-pnpm install
-pnpm build
-pnpm link --global
-```
-
-Verifica que funciona:
-
-```bash
+npm install -g wepwawet
 wep --version
 wep --help
 ```
 
----
+See [installation](docs/INSTALLATION.md) for updates and development builds.
 
-## Primer uso: inicializar un proyecto
-
-Ve a cualquier repositorio donde uses un agente de código:
+## 2. Initialize your project
 
 ```bash
-cd /ruta/a/mi-proyecto
-wep init
+cd /path/to/your-project
+wep init --target codex --dry-run
+wep init --target codex
 ```
 
-wep detecta automáticamente qué agente tienes configurado (busca `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, etc.) y te pregunta si es correcto. Si quieres saltarte la pregunta:
+Replace `codex` with `claude`, `copilot`, or `pi`. Init also supports
+`--target codex,claude` or `--target all`. With one detected setup, `wep init` selects
+it directly; with none or several it prompts in a terminal. In headless use, supply
+`--target` instead of relying on a prompt.
 
-```bash
-wep init --target codex      # OpenAI Codex
-wep init --target claude     # Claude Code
-wep init --target copilot    # GitHub Copilot
-wep init --target pi         # Pi
-wep init --target all        # todos a la vez
-```
+A normal init creates shared config, policy, wiki pages, task templates, review
+contracts, and target-specific instructions and skills. It enables the judge on
+Codex, Claude Code, and Copilot. Comprehension, the implementer, and tracing stay off.
+For a smaller installation, use `--modules tasks`; see [modules](docs/CONFIGURATION.md#modules).
 
-Para ver qué crearía sin escribir nada:
+If a root instruction file already exists, init preserves it and writes a candidate
+such as `AGENTS.wep.suggested.md`. Review and merge the needed instructions before
+expecting the agent to use the harness. The installed Doctor workflow can propose a
+minimal diff, but must receive your approval of that exact diff before editing a
+protected instruction file.
 
-```bash
-wep init --target claude --dry-run
-```
+## 3. Prepare project context
 
-### Qué crea init
-
-Siempre crea la capa neutral en `.wep/`:
-
-```
-.wep/
-  config.json        ← configuración del proyecto (workflow por defecto, judge, etc.)
-  policy.json        ← reglas de merge y presupuesto de contexto
-  wiki/              ← documentación que el agente mantiene entre sesiones
-  tasks/             ← cápsulas de tarea
-  targets/           ← notas por target
-```
-
-Y los ficheros específicos del target. Para Claude Code, por ejemplo:
-
-```
-CLAUDE.md                                ← instrucciones principales
-.claude/commands/wep-doctor.md
-.claude/commands/wep-task.md
-.claude/skills/wep-task/SKILL.md
-.claude/skills/wep-workflow/SKILL.md
-... (un skill por workflow)
-```
-
-**Regla clave**: si ya tienes un `CLAUDE.md` (o `AGENTS.md`, o `copilot-instructions.md`), wep **nunca lo sobreescribe**. En su lugar crea `CLAUDE.wep.suggested.md` con el contenido sugerido para que lo fusiones tú manualmente.
-
----
-
-## El paso más importante: doctor
-
-Después de init, abre tu agente en el proyecto y escríbele:
-
-```
-Run wep doctor.
-```
-
-El agente lee el harness instalado, audita el setup y **rellena `.wep/wiki/`** con contexto real del proyecto: arquitectura, convenciones, cómo correr los tests, decisiones de diseño. Esto es lo que convierte el esqueleto en un harness funcional.
-
-También puedes correr el doctor desde el CLI para obtener un score de preparación:
+Run the deterministic checks:
 
 ```bash
 wep doctor
-wep doctor --json
+wep status
 ```
 
-El doctor te dice:
-- qué targets están instalados
-- si faltan ficheros del harness
-- si hay ficheros `.suggested.md` pendientes de fusión
-- si el judge está habilitado pero sin ficheros
-- si la versión instalada difiere de la CLI actual
-- un score de 0 a 100
-- el siguiente paso sugerido
+Doctor reports missing files, configuration gaps, pending instruction merges, version
+drift, and wiki issues. It writes setup reports; the score describes harness readiness,
+not application correctness. `wep doctor --fix --dry-run` previews file/config repairs.
+Repair invalid JSON manually before applying repairs or rerunning init.
 
----
+Then ask your coding agent:
 
-## Crear una tarea
+> Use the wep-doctor workflow to audit this setup and document the verified project architecture, conventions, and test commands.
 
-Una vez el harness está instalado, simplemente habla con tu agente:
+The agent inspects relevant files and records project knowledge in `.wep/wiki/`.
+The CLI does not infer this knowledge itself. Check what the agent wrote, especially
+commands it proposes to run.
 
-```
-Arregla el bug donde la sesión expira demasiado pronto.
-```
+## 4. Define a task before implementation
 
-El agente leerá `CLAUDE.md` (o equivalente), creará una cápsula de tarea en `.wep/tasks/TASK-001-fix-session-expiry/`, elegirá el workflow apropiado (TDD para bugs) e implementará.
+Ask the agent:
 
-Si prefieres crear la cápsula desde el CLI (útil para CI o scripting):
+> Fix the login bug where sessions expire before the configured timeout. Use TDD.
+
+The harness instructs it to clarify material ambiguity, inspect relevant code, and
+create `.wep/tasks/TASK-001-<slug>/` with five canonical files:
+
+| File | Contents |
+| --- | --- |
+| `task.md` | Goal, workflow reason, validation commands, clarifications, open questions |
+| `context.md` | Relevant files and task context |
+| `plan.md` | Selected workflow and implementation steps |
+| `acceptance-criteria.md` | Numbered `AC-<n>` criteria and optional evidence declarations |
+| `review-checklist.md` | Evidence references and process attestations |
+
+Before implementation, the agent presents an Approval Brief with the workflow and
+reason, resolved clarifications, numbered acceptance criteria, and exact validation
+commands. Approve it when it matches the intended change. The agent records command
+approval with `wep task approve-commands TASK-001`, bound to the command-list digest. The
+agent should not fill gaps by guessing. For scripts or headless setup you can create
+a skeleton instead:
 
 ```bash
-wep task "Arregla bug de expiración de sesión"
-wep task "Define API de facturas" --workflow SDD+EDD
+wep task "Fix login session expiry bug" --workflow TDD
+wep task list
+wep task show TASK-001
 ```
 
-Esto crea:
+The CLI creates placeholders, not a researched plan. With no explicit workflow, a
+concrete project default wins; `task-fit` uses hard-coded English keyword matching
+in the CLI. Its rules are not the same as the agent's configurable `workflowRules`.
+`UI review` can be automatically recommended for inspection tasks, but cannot be
+passed to `--workflow`. See [workflows](docs/WORKFLOWS.md).
 
-```
-.wep/tasks/TASK-001-fix-session-expiry/
-  task.md                ← descripción y objetivo
-  context.md             ← contexto relevante cargado por el agente
-  plan.md                ← plan de implementación
-  acceptance-criteria.md ← criterios de aceptación
-  review-checklist.md    ← checklist de revisión
-```
+## 5. Implement and validate
 
-### Compilar un brief
+The agent follows the selected method and runs the validation declared in `task.md`.
+For TDD, retain evidence of the failing regression and the passing fix. Complete the
+capsule and checklist before snapshot capture.
 
-Si quieres un fichero único listo para pegar en una sesión de agente:
+Optionally enable `wep-implementer` for delegation. With its `post-clarification` trigger,
+approving the initial Approval Brief also confirms that delegation; `on-request` waits
+for an explicit request and confirmation. Its bounded attempt log lives under `.wep/local/impl/`, outside the
+reviewed task capsule. `wep impl` manages definitions and records; it does not launch
+an agent. See [implementer configuration](docs/CONFIGURATION.md#implementer).
+
+To pass the capsule to another session, compile its five files into a brief:
 
 ```bash
-wep compile TASK-001
-wep compile TASK-001 --target claude
+wep compile TASK-001 --target codex
 ```
 
-Genera `.wep/tasks/TASK-001/exports/claude.md` con todo concatenado.
+The output is under the actual capsule directory at `exports/codex.md`. It is a derived
+file, regenerated on each run. It does not include the entire repository or personal logs.
 
----
+## 6. Review an immutable change
 
-## Workflows
+After the approved implementation, the installed workflow automatically invokes the
+independent judge. A normal init enables it on supported hosts; `wep judge status` reports state and files, and `wep judge disable`
+turns it off. Pi has no native judge, implementer, or comprehension agent format.
 
-wep tiene 8 workflows predefinidos. El agente elige el más adecuado automáticamente según la descripción de la tarea, aunque puedes sobreescribirlo con `--workflow`.
-
-| Workflow | Cuándo usarlo |
-|---|---|
-| `fast-patch` | Bug, fix, hotfix — el cambio mínimo seguro |
-| `research-first` | Spike, exploración, investigación |
-| `SDD` | Spec-Driven Development — spec antes de código |
-| `TDD` | Test-Driven Development — tests antes de código |
-| `EDD` | Example-Driven Development — ejemplos concretos antes de código |
-| `SDD+TDD` | Spec + tests antes de código (para features críticas) |
-| `SDD+EDD` | Spec + ejemplos concretos (para APIs o contratos) |
-| `TDD+EDD` | Tests + ejemplos (validación exhaustiva) |
-| `UI review` | Revisión de UI — el agente descubre qué herramientas tiene antes de actuar |
-
-### El default y cómo cambiarlo
+The lead agent captures the completed task against the intended Git base:
 
 ```bash
-wep config set defaultWorkflow task-fit    # el agente elige por tarea (recomendado)
-wep config set defaultWorkflow SDD+TDD     # todo el proyecto usa SDD+TDD por defecto
+wep judge snapshot TASK-001 --base main --json
 ```
 
-`task-fit` es el más flexible: el agente analiza la descripción y elige el workflow mínimo que se ajusta.
-
-### Reglas de auto-asignación
-
-Las reglas están en `config.json`:
-
-```json
-"workflowRules": [
-  { "match": "bug|fix|regression|hotfix", "workflow": "fast-patch" },
-  { "match": "research|spike|explore|investigate", "workflow": "research-first" },
-  { "match": "ui|screen|component|layout|design", "workflow": "UI review" }
-]
-```
-
-Si la descripción de la tarea contiene alguna de esas palabras clave, el workflow se asigna automáticamente.
-
----
-
-## Configuración del proyecto
-
-Todo vive en `.wep/config.json`. Puedes editarlo con el CLI:
+Replace the placeholder below with the returned snapshot ID:
 
 ```bash
-wep config show
-wep config set defaultWorkflow SDD+TDD
-wep config set requireTaskCapsule true
-wep config set requireWorkflowReason true
-wep config set contextBudget proportional
+wep judge run TASK-001 --candidate SNAPSHOT:<id> --json
 ```
 
-### Presupuesto de contexto
+If the exact ordered command list was pre-approved with
+`wep task approve-commands TASK-001`, this runs it without asking again. Otherwise it
+displays the commands and requests approval. Headless
+approval requires `--approve-commands '<exact command>'` once per command, in order.
+Read the list before approving. By default commands run in your working tree;
+`--isolated` uses a disposable copy and is not an operating-system sandbox. Do not edit
+project files while the run is active.
 
-| Valor | Qué carga el agente |
-|---|---|
-| `minimal` | Solo la política y la cápsula de tarea actual |
-| `proportional` | Política, cápsula, y páginas de wiki relevantes |
-| `thorough` | Revisión amplia de la wiki (para tareas de alto riesgo) |
-
----
-
-## Actualizar el harness
-
-Si actualizas la CLI, el harness instalado puede quedarse desactualizado. Compruébalo con:
+Keep the receipt path and digest printed by your own run. Give the independent judge
+the task, snapshot boundary, and receipt. It reviews the change and returns structured
+JSON; it does not execute tests or implement its feedback. Save its exact record locally,
+then verify it using the digest you observed:
 
 ```bash
-wep doctor
+wep judge verify .wep/local/judge/TASK-001/review.json --receipt-digest <observed-digest>
+wep judge current .wep/local/judge/TASK-001/review.json
 ```
 
-Si el doctor detecta drift de versión, actualiza:
+The placeholders and example record path must match your run. An older approval can
+remain valid for its reviewed boundary while newer edits require another review. Use
+a catch-up snapshot for that delta. See [Judge](docs/JUDGE.md) for the full protocol,
+exit statuses, mechanical migrations, record schemas, and retention.
+
+## 7. Check understanding when useful
 
 ```bash
+wep comprehension enable
+```
+
+This installs a separate agent that reconstructs the approved change, presents a change
+map and test matrix, and asks code-specific questions. Pending checkpoints are surfaced
+through `wep status`; ask the agent for one when ready. The separate evaluator owns
+the questions and grading. It does not control Git or block merges. Personal answers stay under Git-ignored `.wep/local/comprehension/` when privacy
+checks pass. See [Comprehension](docs/COMPREHENSION.md).
+
+## 8. Maintain the harness
+
+After updating the CLI, preview the installed-file upgrade:
+
+```bash
+wep upgrade --dry-run
 wep upgrade
-wep upgrade --target claude
-wep upgrade --dry-run   # previsualizar sin escribir
+wep doctor
 ```
 
-Los ficheros protegidos (`CLAUDE.md`, `AGENTS.md`, `copilot-instructions.md`) nunca se sobreescriben.
+Unchanged generated files can update automatically; edited files receive candidates
+under `.wep/upgrades/`. Project wiki content, task capsules, local records, and root
+instructions are preserved. Resolve candidates and rerun before considering an
+incomplete upgrade finished.
 
----
+Other capabilities have separate guides:
 
-## El judge: revisión independiente (opcional)
+- [Command guide](docs/COMMANDS_AND_UX.md): all command groups, task search, command approval, migration, and removal.
+- [Template packs](docs/TEMPLATE_PACKS.md): applying and updating team conventions and custom target agents.
+- [Tracing](docs/TRACING.md): opt-in local observations and session reports.
+- [Continuation](docs/CONTINUATION.md): portable declared state; the reader does not resume execution.
+- [Harness specification](docs/HARNESS_SPEC.md): task and evidence contracts.
+- [Security and merge rules](docs/SECURITY_AND_MERGE_RULES.md): preservation, permissions, and limits.
 
-El judge es un subagente independiente que revisa si la implementación cumple la cápsula de tarea. Está deshabilitado por defecto porque introduce latencia, pero es muy útil para features críticas o equipos que quieren un segundo par de ojos automático.
-
-La idea es simple: el agente que implementa tiene un sesgo hacia su propio trabajo. El judge es un agente separado que solo tiene acceso al plan y a los criterios de aceptación, y verifica de forma independiente.
-
-```bash
-wep judge enable           # habilita e instala los ficheros del agente
-wep judge enable --dry-run # previsualiza sin escribir
-wep judge disable          # deshabilita (los ficheros se mantienen)
-wep judge status           # muestra estado y ficheros presentes
-```
-
-Después de `judge enable`, encontrarás el fichero del agente en la ubicación nativa de tu target:
-
-| Target | Fichero |
-|---|---|
-| Claude Code | `.claude/agents/wep-judge.md` |
-| GitHub Copilot | `.github/agents/wep-judge.agent.md` |
-| Codex | `.codex/agents/wep-judge.toml` |
-| Pi | No soportado (Pi no tiene API nativa de subagentes) |
-
-**Nota sobre el modelo**: wep no hardcodea ningún modelo. Después de habilitar el judge, edita el fichero generado y añade el modelo que prefieras. Consulta [docs/JUDGE.md](docs/JUDGE.md) para instrucciones detalladas por plataforma.
-
----
-
-## Eliminar el harness
-
-```bash
-wep remove --target codex              # lista qué eliminaría (dry-run implícito)
-wep remove --target codex --force      # elimina ficheros de skills de codex
-wep remove --all --force               # elimina .wep/ y todos los ficheros de target
-```
-
-Los ficheros protegidos (`AGENTS.md`, `CLAUDE.md`, `copilot-instructions.md`) siempre se saltan — elimínalos manualmente si hace falta.
-
----
-
-## Referencia rápida
-
-| Objetivo | Comando |
-|---|---|
-| Instalar harness | `wep init` |
-| Auditar setup | `wep doctor` |
-| Ver estado | `wep status` |
-| Crear cápsula de tarea | `wep task "<descripción>"` |
-| Compilar brief para el agente | `wep compile TASK-001` |
-| Ver configuración | `wep config show` |
-| Cambiar workflow por defecto | `wep config set defaultWorkflow SDD+TDD` |
-| Habilitar judge | `wep judge enable` |
-| Habilitar tracing observacional | `wep trace enable` |
-| Ver informe de conformidad | `wep trace report` |
-| Actualizar harness | `wep upgrade` |
-| Eliminar harness | `wep remove --target codex --force` |
-
----
-
-## Preguntas frecuentes
-
-**¿Tengo que usar el CLI para cada tarea?**
-No. El flujo normal es hablarle directamente al agente. El CLI es útil para CI, scripting, o cuando quieres crear una cápsula antes de abrir el agente.
-
-**¿Qué pasa si ya tengo un `CLAUDE.md` con mis instrucciones?**
-wep nunca lo sobreescribe. Crea `CLAUDE.wep.suggested.md` con el contenido sugerido. Tú fusionas manualmente. El doctor te avisará mientras haya un fichero `.suggested.md` pendiente.
-
-**¿Funciona con varios agentes a la vez?**
-Sí. Usa `--target all` o instala targets de forma individual. La capa neutral en `.wep/` es la misma para todos; solo cambian los adaptadores de target.
-
-**¿El agente puede cambiar el workflow durante la tarea?**
-Sí, con `requireWorkflowReason: true` el agente debe justificar cualquier cambio de workflow. Queda registrado en la cápsula.
-
-**¿Cómo sé si el setup está bien?**
-`wep doctor` te da un score de 0 a 100 y una lista de problemas concretos con el comando exacto para solucionarlos.
+To remove the harness, preview `wep remove --all`, then use `--force` to apply it.
+Task capsules and local records are retained unless you also request `--purge-tasks`
+or `--purge-local`. Root instruction files are always retained for manual cleanup.

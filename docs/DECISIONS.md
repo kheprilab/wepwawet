@@ -1,29 +1,33 @@
-# Product Decisions
+# Product design choices
 
-## Decision 1 — Harness-first
+## Files installed in the repository
 
-wep v0.1 is a harness installer, not an AI brain.
+Wepwawet installs workflow instructions, task templates and shared project context. The CLI
+performs deterministic operations; the coding agent does the reasoning and implementation.
+It does not call a model provider or run the agent itself.
 
-## Decision 2 — Existing instructions are sacred
+## Preserve existing root instructions
 
-`init` never overwrites existing setup.
+Initialization writes suggested candidates for existing root instruction files, including
+when `--force` is used. Other generated files can be overwritten with `--force`.
+Doctor reports setup gaps and supplies the agent workflow for reviewing instruction merges.
+See [Security and merge rules](SECURITY_AND_MERGE_RULES.md).
 
-`doctor` audits and proposes improvements.
+## Shared context, target-specific adapters
 
-## Decision 3 — `.wep/` is source of truth
+`.wep/` contains shared configuration, project wiki and task records. Target adapters expose
+that context in the files each supported host reads. This keeps task context independent of
+the current agent, while leaving host-specific discovery and permissions to the host.
 
-Target files are adapters.
+## Codex instructions and agents use different paths
 
-## Decision 4 — Codex uses AGENTS.md and .agents/skills
+Codex root instructions use `AGENTS.md` and workflow skills use `.agents/skills/`.
+Optional Codex agents use `.codex/agents/`; it is not the root instruction location.
+See [Targets](TARGETS.md).
 
-Do not depend on `.codex/` for main instructions.
+## Checks have explicit boundaries
 
-## Decision 5 — CLI is not the implementer
-
-The wep CLI installs the harness and performs deterministic file operations. It does not implement the app feature.
-
-After init, the chosen programming agent may implement normally when the user asks it to, guided by the task capsule and workflow.
-
-## Decision 6 — Agent does intelligent work after init
-
-The user's chosen agent does deep reasoning once the wep harness exists.
+Doctor checks setup; the independent judge checks a task and code boundary; comprehension
+checks the developer's understanding. Those are separate operations. None substitutes for the
+others, and a prompt-level instruction is not a sandbox or an authenticated reviewer identity.
+See [Judge](JUDGE.md) and [Comprehension](COMPREHENSION.md).

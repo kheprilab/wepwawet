@@ -13,8 +13,8 @@ export function registerInit(program: Command): void {
         "--modules <modules>",
         "comma-separated modules to install (templates, tasks, judge, comprehension, impl, trace)",
       )
-      .option("--template <name>", "apply a bundled enterprise template pack")
-      .option("--template-pack <path>", "apply a target-relative enterprise template pack")
+      .option("--template <name>", "apply a bundled template pack")
+      .option("--template-pack <path>", "apply a target-relative template pack")
       .addHelpText(
         "after",
         [

@@ -1,16 +1,53 @@
 # Judge
 
-The wep judge is an optional subagent that independently reviews whether an implementation matches the task capsule. It is separate from the primary coding agent, reconstructs the exact change boundary itself, and reads without modifying product code or Git state.
+The wep judge reviews an implementation against its task capsule in a separate agent context. It reads the exact change boundary and reports findings without editing product code or Git state. The CLI captures evidence and verifies the returned record; it does not invoke a model.
+
+A fresh full `wep init` enables the judge for supported targets. A modular install that omits `judge` starts with it disabled. Comprehension and the implementer agent start disabled. Configuration and template packs can change these settings; check `wep judge status` and `wep config show`. The canonical `agents.judge` settings take precedence over the legacy `judge` block when both are present. The installed workflow instructs the primary agent to invoke an enabled judge after implementation without another confirmation. The CLI itself does not launch agents or enforce GitHub merge rules.
 
 ## How it works
 
-After the primary agent finishes implementing a task, it offers the user the option to invoke the judge. The user confirms. The judge reads the task capsule (`task.md`, `acceptance-criteria.md`, `plan.md`) and the changed files, then reports:
+Before implementation, the agent presents an Approval Brief with the workflow, resolved clarifications, numbered acceptance criteria, and exact validation commands. After approval, it records command consent with `wep task approve-commands TASK-XXX`. Once implementation is complete, the primary agent proceeds to the enabled judge without asking again. The trusted caller captures a snapshot and runs the capsule's approved validation commands once. The judge reads the task capsule (`task.md`, `acceptance-criteria.md`, `plan.md`), changed files, and validation receipt, then reports:
 
 - **APPROVED** — implementation matches the task capsule.
 - **NEEDS CHANGES** — mostly correct but has specific gaps.
 - **BLOCKED** — does not match the goal or has critical issues.
 
-The judge reports its exact base/candidate boundary, validation evidence, and a structured review record. It does not implement its own feedback. If changes are needed, the user hands them back to the primary agent. An enabled comprehension evaluator runs only after deterministic verification confirms `APPROVED` for the current boundary.
+The judge reports its exact base/candidate boundary, validation evidence, and a structured review record. It does not implement its own feedback. The primary agent handles feedback within the approved contract and returns unresolved decisions to the user. When the judge is enabled, comprehension requires a verified, independent `APPROVED` record whose snapshot is `CURRENT`.
+
+## Commands
+
+Run `wep judge <command> --help` for the exact syntax. `--json` is available on every command.
+
+| Command | Arguments and options | Purpose |
+| --- | --- | --- |
+| `enable`, `disable`, `status` | `--dry-run`, `--force` | Configure the judge or inspect installed agent files |
+| `snapshot <task-id>` | `--base <ref>` (default `HEAD`), repeatable `--include-task`, `--allow-empty`, `--timings` | Capture a full immutable boundary |
+| `snapshot <task-id> --from-review <file>` | `--receipt-digest <digest>` or repeatable `--approve-commands`, `--allow-empty`, `--timings` | Capture the delta after strongly verifying an approved parent |
+| `scope <task-id>` | required `--base <ref>`, `--candidate <ref>` (default `WORKTREE`), repeatable `--include-task` | Compute the complete scope block for a review record |
+| `run <task-id>` | required `--candidate SNAPSHOT:<id>`, repeatable `--approve-commands`, `--isolated`, `--break-lock`, `--timings` | Execute approved capsule validation and write a receipt |
+| `verify <review-file>` | `--receipt-digest <digest>` or `--run-tests`, repeatable `--approve-commands`, `--timings` | Check a returned record and its evidence |
+| `current <review-file>` | snapshot review required | Classify live applicability |
+| `reproduce <task-id>` | required `--base <ref>` and `--candidate SNAPSHOT:<id>`, repeatable `--include-task` and `--approve-commands` | Reproduce declared generated changes from the base |
+| `rounds [task-id]` | optional task filter | Count historical review rounds |
+| `prune` | `--keep <count>` (default `5`), `--force` | Preview retention or delete old snapshots |
+
+`--base` and `--include-task` configure a full capture. A catch-up capture inherits its parent's
+boundary and included-task decision. `--receipt-digest` is valid on `snapshot` only with
+`--from-review`. `verify` refuses to combine `--run-tests` and `--receipt-digest`.
+
+## Review records
+
+The installed schema is `.wep/judge/schemas/review.schema.json`. Current records use schema
+version 6. Required top-level fields are `schemaVersion`, `taskId`, `scope`, `verdict`,
+`tests`, `criteria`, `observations`, and `reviewedAt`. Optional fields are `independent`
+and `receiptDigest`; unknown keys are rejected. Each `tests` entry has `command`, `status`
+(`passed`, `failed`, or `not-run`), and optional string `evidence`. Each `criteria` entry has
+`id`, `status` (`pass`, `fail`, or `not-evaluated`), and non-empty `evidence`.
+
+The judge copies the complete `scope --json` output rather than constructing scope hashes.
+A trusted caller saves the judge's exact returned JSON below `.wep/local/judge/`; the judge
+is instructed to remain read-only. Save records in `TASK-<n>/` or its direct `records/`
+subdirectory if they should appear in `judge rounds`.
 
 ## Measuring latency
 
@@ -121,12 +158,11 @@ base refs; they are rejected only because they predate the empty-boundary author
 Older snapshot formats may predate other contracts, including write detection and canonical base
 refs where applicable, and are rejected with an explicit legacy-format diagnostic.
 
-If a `SNAPSHOT:<id>` cannot be captured, the judge falls back to the `WORKTREE` candidate and
-records which boundary it reviewed in `scope.candidate`. A missing snapshot is not by itself a
-reason to report `BLOCKED`; `BLOCKED` is for an unclear or unreviewable boundary. The snapshot is
-preferred because it is immutable, but `WORKTREE` is a compatible boundary and `wep judge
-verify --run-tests` still re-runs the capsule-declared commands and binds the verdict to the
-boundary digest.
+`scope` and plain `verify` retain compatibility with commit-ref and `WORKTREE` candidates.
+These candidates do not support `judge run`, `verify --run-tests`, receipt verification, or
+`judge current`: those commands require a snapshot. The generated reviewer instructions mention
+`WORKTREE` as a fallback, but the receipt-based review flow cannot complete on that boundary.
+Capture a snapshot for validation-backed review, catch-up review, or a comprehension handoff.
 
 Before accepting the verdict or starting comprehension:
 
@@ -161,13 +197,16 @@ inferred or silently excluded from the digest.
 
 An `APPROVED` record must also be backed by evidence and internally coherent. Verification rejects it when:
 
-- **no validation passed** — `tests` must contain at least one entry with `status: "passed"`. A review that executed nothing cannot approve. A judge that could not run any command reports `BLOCKED` and says which command it could not run.
+- **no validation passed**: runtime-validation capsules need at least one `tests` entry with `status: "passed"`. A valid `no-runtime-validation: <reason>` declaration is the explicit exception; it establishes no runtime result. The judge reads validation receipts and never executes commands itself.
 - **the passing command was invented** — when the capsule declares commands, at least one passing entry must be one of them (see below).
 - **a required command failed** — every declared command must pass unless its line ends `# optional`. A failed optional command is a warning, not a blocker.
 - **`no-runtime-validation` is malformed** — a single `no-runtime-validation: <reason>` line inside the fence needs a non-empty reason and zero commands. It does not claim any code was verified.
 - **a declared criterion did not pass** — every entry in `criteria` must carry `status: "pass"`, with exactly one entry per `AC-<n>` the capsule declares. A missing or extra identifier fails verification and the error names it. A verdict cannot approve and report a failed criterion at the same time; that is `NEEDS_CHANGES`.
 
-A `failed` entry in `tests` invalidates the record under any verdict. These rules apply only to `APPROVED` — a `NEEDS_CHANGES` or `BLOCKED` record is expected to carry failed criteria and unrun commands.
+A failed command not declared optional is a verification rejection reason. A failed declared
+optional command produces a notice, unless a criterion requires it with `proof-command:`.
+`verify` exits nonzero for `NEEDS_CHANGES` and `BLOCKED`; those are valid review outcomes to
+act on, but they cannot satisfy an approval gate.
 
 ### Per-criterion results
 
@@ -243,8 +282,8 @@ Rejection reasons (`reasons` — these reject the record):
 Notices (`notices` — non-blocking):
 
 - `execution not observed: command accepted on trust`: the record claims the command passed and
-  `--run-tests` did not observe it. This is a notice. The record stays valid under the usual
-  rules. A successful observed re-run removes it.
+  neither a pinned receipt nor `--run-tests` backs it. This is a notice. The record stays valid
+  under the usual rules. A passing pinned receipt or observed re-run removes it.
 - `proof-doc \`<ref>\` unavailable`: the referenced document is missing, not a regular file,
   leaves the repository, or its `#Heading` fragment was not found in the target document.
 
@@ -322,7 +361,21 @@ Verification distinguishes these capsule shapes, so backward compatibility canno
 | Section present, single `no-runtime-validation: <reason>` line | Declares no runtime validation. Needs a non-empty reason and zero commands. Does not claim any code was verified. |
 | Section present, block empty or malformed | Rejected for `APPROVED`. The section exists, so the commands were meant to be filled in — this is an unfinished capsule, not a legacy one. |
 
-`wep task` generates the section with an empty block, so every capsule created from this version on falls in one of the last four rows.
+`wep task` generates an empty validation block. Fill it before review. For a documentation-only capsule, the
+explicit declaration can be:
+
+````markdown
+## Validation
+
+```text
+no-runtime-validation: prose changes only; no executable behavior changed
+```
+````
+
+This permits plain verification without a passing command and reports
+`verifiedNow: not-applicable-to-runtime`. `judge run` refuses it because there is nothing to
+execute. The generated reviewer prompt still requests a receipt, so a no-runtime capsule does
+not follow the normal receipt-run sequence. It must never be described as runtime-verified.
 
 ### Validation receipt run
 
@@ -334,6 +387,14 @@ wep judge run TASK-001 --candidate SNAPSHOT:<id>
 
 Every command in the capsule's `## Validation` block runs once, in declared order, with the
 same approval rules as `--run-tests` below.
+
+The installed task workflow records the initially approved list with
+`wep task approve-commands TASK-001`. That stores a task-bound digest under
+`.wep/local/approved-commands/`. Matching lists can run again without a new prompt; changing the
+command list invalidates that preapproval. Without matching preapproval, a terminal shows the
+commands and asks for consent, while headless use requires one `--approve-commands` flag per
+command in the printed order. This preapproval authenticates neither the project content nor the
+person who created the local approval file.
 
 By default the run happens **in the live working tree**, with the project's own environment
 (`node_modules`, `.venv`, `target/` and warm build caches), for any technology:
@@ -421,12 +482,20 @@ wep judge verify .wep/local/judge/TASK-001/review.json --run-tests
 
 This re-runs the capsule-declared commands the record claims passed. Snapshot validation
 runs in a disposable copy outside the live project. Its dependencies are materialised from
-the committed lockfile, not inherited from the snapshot's private copy, so re-execution
+the snapshot's lockfile, not inherited from the snapshot's private copy, so re-execution
 rests on the lockfile rather than on bytes inside the reviewed artifact. If the boundary
 declares dependencies but has no lockfile, or the install fails, verification fails with a
 named reason and never falls back to the snapshot's copy. Verification also fails if a
 command fails or changes tracked reviewed content. Ignored build output is discarded with
 the disposable workspace and the immutable snapshot is never mutated by verification.
+
+Automatic dependency preparation is currently for Node projects: when `package.json` declares
+dependencies, wep selects `pnpm install --frozen-lockfile`, `npm ci`, or
+`yarn install --frozen-lockfile` from the available lockfile, in that order. The executable must
+be available on the machine. The installer can run package lifecycle scripts and access the
+network; it is part of preparing the approved disposable run. Other ecosystems receive no
+automatic environment setup. Declare their required preparation in the capsule's validation
+commands or use an in-place run with an already prepared environment.
 
 When a declared command fails during re-execution, the current result preserves a bounded,
 redacted diagnostic under `reexecuted[].evidence` in JSON and prints it in human output. It
@@ -444,7 +513,8 @@ validation block before executing work you did not supervise.
 - A review record **cannot** inject a command. Only declared commands are ever executed, so the agent-written record has no path to a shell.
 - The capsule **can**. In the normal wep flow the primary agent writes the capsule, so `task.md` is agent-authored project content, not a human-authored file.
 
-That is why nothing runs unapproved. The flag requires a snapshot candidate — a `WORKTREE` or commit-ref record is refused, so re-execution never touches the live tree — and before executing anything it asks:
+That is why execution requires command approval, either a matching stored preapproval or
+consent for this invocation. The flag requires a snapshot candidate — a `WORKTREE` or commit-ref record is refused, so re-execution never touches the live tree — and without matching stored preapproval it asks:
 
 ```bash
 # terminal: the declared commands are printed and confirmed with y/N
@@ -485,21 +555,9 @@ file. It comes from the digest the trusted caller saw `judge run` print and pins
 that changed after the run fails that check. A caller who did not observe the run, or who
 takes the digest from the record or the judge's report, gains nothing from it.
 
-If a deployment needs a transferable claim, it must use an explicitly optional receipt
-issued by a trusted CI system or other configured orchestrator. The signed canonical
-envelope must bind at least the snapshot ID and scope digest, record digest, exact
-declared command list and order, exit statuses/results, CLI version, policy identity,
-lockfile identity, issuer identity, and execution timestamp/run ID. Verification must
-require a trust root configured outside the reviewed worktree and must invalidate the
-receipt when any bound input, issuer key, or trust configuration changes. Such a receipt
-attests only that the trusted issuer observed those exact commands passing for that exact
-boundary; it does not attest to local operator consent and does not upgrade the judge's
-`APPROVED` or `CURRENT` fields.
-
-Migration is additive: old records remain compatible but have no retroactive receipt,
-and a future receipt verifier must be a separate explicit path. No receipt may make
-operator consent reusable; each execution still needs approval for its exact command
-list.
+Wepwawet has no signed CI receipt, external issuer configuration, or transferable attestation
+verifier. A downstream CI system can record its own execution evidence, but that is a separate
+integration and is not a capability of `wep judge verify`.
 
 ### Mechanical change reproduction
 
@@ -534,7 +592,7 @@ generator or of non-generated changes.
 
 Files matching `blockedReadPatterns` in `policy.json` are excluded from the diff at the Git level and listed by path in `scope.excludedPaths`. Their contents are never fingerprinted, and blocked tracked paths are removed from the snapshot's reviewable worktree after checkout. The path list is itself part of the boundary, so a blocked file appearing or disappearing still invalidates a stale approval.
 
-This is the one place where `blockedReadPatterns` is mechanically applied to both the
+Scope computation and snapshot capture apply `blockedReadPatterns` mechanically to the
 boundary and reviewable worktree. It is not encryption: the private Git repository still
 contains the candidate commit's object database, and a tracked secret must be removed from
 Git history separately. Because boundary filtering fails closed, an unusable
@@ -545,7 +603,10 @@ This applies to tracked and untracked files alike. Earlier versions aborted the 
 
 ## What this does and does not prove
 
-It proves the verdict is bound to a specific task capsule and code boundary, that the boundary still matches the repository, and — with `--run-tests` — that the declared validation really passes.
+Verification binds the record to the task capsule and reviewed code boundary. A pinned receipt
+checks the results observed by the caller; `--run-tests` observes a fresh validation run.
+Plain verification accepts the record's validation claims on trust. Snapshot approval remains
+historically valid when live files change; only `judge current` establishes live applicability.
 
 The snapshot integrity check fingerprints every tracked and untracked-but-not-ignored path by its content *and* its change-time (ctime), so a file changed and restored to its original bytes — or a file created and deleted inside a tracked directory — is still reported as a modification after capture, not only a final content mismatch. The inode number is deliberately not part of the fingerprint: on FUSE and some network mounts it is synthesized by the daemon and drifts over time even when nothing changed, which would make an honest snapshot permanently unreviewable. The check does not cover ignored paths (build output, dependencies): a write there is permanent and no integrity check sees it, which is why `--run-tests` materialises dependencies from the lockfile instead of trusting the snapshot's copy. This is tamper-evident bookkeeping, not a sandbox — a determined reviewer with shell access can still damage things wep cannot see.
 
@@ -561,17 +622,43 @@ After strong verification, compare the approved snapshot with the live workspace
 wep judge current .wep/local/judge/TASK-001/review.json
 ```
 
-The command rejects malformed, non-approved, or boundary-invalid records before reporting
-`CURRENT`, `NEWER_CHANGES`, or `DIVERGED`. When work has advanced on the same lineage,
-capture only the delta:
+The command rejects malformed, non-approved, or boundary-invalid records, then reports three
+separate fields:
+
+- `status`: full workspace comparison, `CURRENT`, `NEWER_CHANGES`, or `DIVERGED`.
+- `reviewBoundary`: the code-review comparison with the task's valid continuation sidecar
+  excluded. It uses the same three labels.
+- `executionMetadata`: sidecar state, `ABSENT`, `UNCHANGED`, `CREATED`, `REMOVED`, or `ADVANCED`.
+
+Creating, removing, or advancing a valid regular `continuation.json` can produce
+`status: NEWER_CHANGES` while `reviewBoundary` stays `CURRENT`. This records execution metadata
+changes without claiming new code was reviewed. Invalid, unsupported, or irregular sidecars are
+not excluded. Changes to code, the five capsule documents, or Git lineage can still move the
+review boundary. The complete snapshot integrity check always includes the sidecar, so editing
+it inside the immutable capture invalidates that snapshot.
+
+`verify` reports these axes under `verifiedNow.reviewBoundary` and
+`verifiedNow.executionMetadata`. A metadata-only advance does not establish progress,
+permission, correctness, or validation evidence. See [Continuation](CONTINUATION.md).
+
+When the code-review boundary has newer changes on the same lineage, capture only the delta:
 
 ```bash
 wep judge snapshot TASK-001 --from-review .wep/local/judge/TASK-001/review.json
 ```
 
-Catch-up re-runs the parent's declared passing validation, binds the exact parent record,
-and recursively requires every ancestor snapshot to remain intact. It never extends an old
-approval over new code silently.
+Catch-up strongly verifies the parent. Supply the digest you observed in the parent's
+`judge run` to avoid executing its validation again:
+
+```bash
+wep judge snapshot TASK-001 --from-review .wep/local/judge/TASK-001/review.json \
+  --receipt-digest sha256:<hex>
+```
+
+Without `--receipt-digest`, it re-runs the parent's declared passing validation after command
+approval. The new snapshot binds the exact parent record and requires every ancestor snapshot
+to remain intact. It does not approve the new delta: run validation and obtain a new judge
+record for the catch-up snapshot.
 
 ## Review rounds
 
@@ -632,7 +719,9 @@ is a dry-run unless `--force` is supplied.
 wep judge enable
 ```
 
-This sets `judge.enabled = true` in `.wep/config.json` and generates agent files for each installed target:
+This enables the resolved `agents.judge` setting in `.wep/config.json` (and keeps an existing
+legacy block in sync), then regenerates agent files for supported installed targets allowed by
+`agents.judge.targets`:
 
 | Target | File |
 |---|---|
@@ -659,7 +748,11 @@ wep judge status
 wep judge disable
 ```
 
-This sets `judge.enabled = false` in config. The agent files are kept — delete them manually if you no longer need them.
+This disables the resolved judge setting and removes the local Claude run guard when possible.
+Generated agent files are kept. Enable, disable, and status accept `--json`, `--dry-run`, and
+`--force`; enable regenerates its agent files from configuration even without `--force`.
+Enabling requires the installed judge contract and safe local ignore; follow the reported
+`wep upgrade` or `wep doctor --fix` instruction if either is missing.
 
 ## Setting a model
 
@@ -686,25 +779,11 @@ a single value.
 > generated file exactly as configured. wep does not have the provider's catalogue, so
 > refusing an unfamiliar value would block a legitimate new model to catch a typo.
 
-### Claude Code
-
-`agents.judge.model.claude` accepts a model alias (`opus`, `sonnet`, `haiku`, `fable`,
-`opusplan`, `default`, `inherit`), a full model name (`claude-opus-5`), or a
-provider-specific id — a Bedrock inference-profile ARN, a Foundry deployment name, a Vertex
-version name. See [Claude Code model configuration](https://code.claude.com/docs/en/model-config).
-
-### GitHub Copilot
-
-`agents.judge.model.copilot` takes the display-name format, optionally qualified by vendor:
-`Claude Opus 4.5`, `GPT-5.2`, `GPT-5 (copilot)`. Quote it — it contains spaces. VS Code also
-accepts an array of fallbacks, but the Copilot CLI rejects one
-([github/copilot-cli#2133](https://github.com/github/copilot-cli/issues/2133)), so wep
-writes a single value. See [custom agents in VS Code](https://code.visualstudio.com/docs/agent-customization/custom-agents).
-
-### Codex
-
-`agents.judge.model.codex` takes the model id used in Codex configuration, for example
-`gpt-5-codex` or `o3`. See [Codex subagent docs](https://developers.openai.com/codex/subagents).
+Use a model identifier available in the host where you invoke the agent. Wepwawet writes a
+single string into Claude/Copilot frontmatter or Codex TOML. Quote values that contain spaces.
+It checks only the configured string's shape and does not verify provider availability,
+account access, or whether the host accepts that identifier. An unfamiliar shape produces a
+warning and is still emitted. Omitting a model leaves model selection to the host.
 
 ## Pi
 
@@ -732,7 +811,7 @@ verification-only; for an independent verdict, run the judge from another host (
 Codex, or Copilot subagent) or a separate session. The snapshot-based `judge current` check
 also requires a snapshot, so a Pi self-review that falls back to `WORKTREE` cannot reach
 `CURRENT` and therefore cannot satisfy the comprehension gate even if marked independent.
-See `.wep/wiki/decisions.md` (2026-08-06, 2026-08-08).
+
 
 ## Project review policy
 
