@@ -29,15 +29,18 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Agent files are generated from src/templates and owned by the provenance manifest,
-# so the dogfooded install is reproducible on a fresh clone. Everything else under
-# .codex stays ignored.
-.codex/*
-!.codex/agents/
 .claude/settings.local.json
 
-# Local dogfooding state
+# Local dogfooding state. The harness this repository uses on itself is installed
+# locally with `wep init`; its config, manifest and generated agent files are not
+# versioned. .claude/settings.json is repository-owned and stays tracked.
 .wep/
+.agents/
+.codex/
+.claude/agents/
+.claude/commands/
+.claude/skills/
+*.wep.suggested.md
 
 # Temporary files
 tmp/
