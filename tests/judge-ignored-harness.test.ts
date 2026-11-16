@@ -175,6 +175,16 @@ describe("judge snapshot in ignored mode", () => {
     expect(current.reviewBoundary).not.toBe("CURRENT");
   });
 
+  it("moves current state away from CURRENT when a review policy appears after capture", async () => {
+    const { repo, task } = await createIgnoredHarnessFixture();
+    const snapshot = await captureJudgeSnapshot(repo, task.taskId, "HEAD");
+    expect(await pathExists(path.join(snapshot.worktreePath, ".wep/review-policy.md"))).toBe(false);
+
+    await writeFile(path.join(repo, ".wep/review-policy.md"), "- Added after the review.\n", "utf8");
+
+    expect((await checkJudgeSnapshotCurrentState(repo, snapshot.candidate)).status).not.toBe("CURRENT");
+  });
+
   it("runs the declared validation from the snapshot and verifies the receipt", async () => {
     const { repo, task } = await createIgnoredHarnessFixture({ symlinked: true });
     const snapshot = await captureJudgeSnapshot(repo, task.taskId, "HEAD");

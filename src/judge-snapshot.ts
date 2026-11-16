@@ -884,7 +884,13 @@ async function harnessControlPaths(
   control: HarnessControl,
   blockedPatterns: string[],
 ): Promise<string[]> {
-  const paths = new Set(HARNESS_CONTROL_FILES);
+  // Only files that exist are listed. A missing one is then simply absent on both sides, so a
+  // later version that knows more control files still loads snapshots captured without them,
+  // while creating or deleting one after capture still changes the digests.
+  const paths = new Set<string>();
+  for (const file of HARNESS_CONTROL_FILES) {
+    if (await lstat(path.join(root, file)).catch(() => undefined)) paths.add(file);
+  }
   const tasksRoot = path.join(root, HARNESS_ROOT, "tasks");
   const entries = await readdir(tasksRoot, { withFileTypes: true }).catch(() => []);
   for (const taskId of new Set(control.taskIds)) {
