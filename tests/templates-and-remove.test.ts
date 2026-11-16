@@ -537,7 +537,10 @@ describe("skill content contract", () => {
     expect(agent).toContain('model_reasoning_effort = "high"');
     expect(agent).toContain("Do not inherit the implementing agent's reasoning");
     expect(agent).toContain("wep judge current <review.json> --json");
-    expect(agent).toContain("current state is 'CURRENT'");
+    // Issue #17: eligibility follows the code-only review boundary, not the full workspace status.
+    expect(agent).toContain("reviewBoundary: CURRENT");
+    expect(agent).toContain("continuation sidecar");
+    expect(agent).not.toContain("current state is 'CURRENT'");
     expect(agent).toContain("Ask one question at a time");
     expect(agent).toContain("Mermaid");
     expect(agent).toContain("test matrix");

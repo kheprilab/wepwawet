@@ -65,11 +65,13 @@ or the implementer's conclusions.
 
 When the judge is enabled, the evaluator itself runs plain `wep judge verify <record> --json`
 and `wep judge current <record> --json`. It requires `approved: true`, an independent record
-(`independent` absent or `true`), and a `CURRENT` result. The generated evaluator instructions
-reject `NEWER_CHANGES` and `DIVERGED`; they do not define a metadata-only exception. Note that
-`judge current` reports both full-workspace `status` and the code-only `reviewBoundary`: a valid
-continuation-sidecar advance can move the former while leaving the latter current. See
-[Judge](JUDGE.md#current-state-and-catch-up-review) before interpreting those fields. With the judge disabled, the handoff can omit its record; disclose that no independent correctness
+(`independent` absent or `true`), and `reviewBoundary: CURRENT`. `judge current` reports both the
+full-workspace `status` and the code-only `reviewBoundary`. A valid continuation-sidecar advance
+can move `status` to `NEWER_CHANGES` while `reviewBoundary` stays `CURRENT`; that case does not
+block comprehension, because the sidecar is execution metadata outside the reviewed boundary. A
+`reviewBoundary` of `NEWER_CHANGES` or `DIVERGED` means reviewed code moved, and the evaluator
+stops until a new review covers it. See [Judge](JUDGE.md#current-state-and-catch-up-review) for
+both fields. With the judge disabled, the handoff can omit its record; disclose that no independent correctness
 review exists, and give the evaluator an explicit, reviewable change boundary.
 
 The evaluator passes neither `--run-tests` nor `--receipt-digest`: it executes no validation and
