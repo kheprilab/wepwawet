@@ -855,16 +855,11 @@ function workspaceDigest(manifest: Map<string, PathFingerprint>): string {
   );
 }
 
-/**
- * Identifies the one path that is exempt from `reviewContentDigest`: the task's continuation
- * sidecar, and only when it is a regular file `readTaskContinuation` accepts as `status: "valid"`.
- * An absent, irregular, invalid, or unsupported sidecar returns `null` and stays inside the
- * reviewable content like any ordinary tracked file.
- */
 const HARNESS_ROOT = ".wep";
-const HARNESS_CONTROL_FILES = [".wep/config.json", ".wep/policy.json"];
+/** Read by the judge for every task; a missing review policy stays missing in the snapshot too. */
+const HARNESS_CONTROL_FILES = [".wep/config.json", ".wep/policy.json", ".wep/review-policy.md"];
 
-/** The control files an ignored harness adds to the snapshot: config, policy and the reviewed capsules. */
+/** The control files an ignored harness adds to the snapshot: config, policies and the reviewed capsules. */
 interface HarnessControl {
   taskIds: string[];
 }
@@ -941,6 +936,12 @@ async function harnessIgnoredByGit(cwd: string): Promise<boolean> {
   return gitExitZero(cwd, ["check-ignore", "-q", "--", ".wep/policy.json"]);
 }
 
+/**
+ * Identifies the one path that is exempt from `reviewContentDigest`: the task's continuation
+ * sidecar, and only when it is a regular file `readTaskContinuation` accepts as `status: "valid"`.
+ * An absent, irregular, invalid, or unsupported sidecar returns `null` and stays inside the
+ * reviewable content like any ordinary tracked file.
+ */
 export async function reviewSidecarExclusion(worktreePath: string, taskId: string): Promise<string | null> {
   try {
     const result = await readTaskContinuation(worktreePath, taskId);

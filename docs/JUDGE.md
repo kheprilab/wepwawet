@@ -778,7 +778,7 @@ wep config set agents.judge.harness ignored
 | Mode | What Git versions | What the snapshot takes from the live workspace |
 | --- | --- | --- |
 | `repo` (default) | `.wep/` with the project, except `.wep/local/` | Nothing extra: the harness comes from Git |
-| `ignored` | Nothing under `.wep/` | `.wep/policy.json`, `.wep/config.json`, the reviewed task capsule and every `--include-task` capsule |
+| `ignored` | Nothing under `.wep/` | `.wep/policy.json`, `.wep/config.json`, `.wep/review-policy.md` when present, the reviewed task capsule and every `--include-task` capsule |
 
 In `ignored` mode:
 

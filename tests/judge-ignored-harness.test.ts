@@ -111,12 +111,14 @@ describe("judge snapshot in ignored mode", () => {
   it("copies only the harness control files into the snapshot", async () => {
     const { repo, task, other } = await createIgnoredHarnessFixture({ otherTask: true });
     await writeFile(path.join(repo, ".wep/local/note.md"), "local only\n", "utf8");
+    await writeFile(path.join(repo, ".wep/review-policy.md"), "- Every change keeps the CLI help in sync.\n", "utf8");
 
     const snapshot = await captureJudgeSnapshot(repo, task.taskId, "HEAD");
     const wep = path.join(snapshot.worktreePath, ".wep");
 
     expect(await pathExists(path.join(wep, "policy.json"))).toBe(true);
     expect(await pathExists(path.join(wep, "config.json"))).toBe(true);
+    expect(await readFile(path.join(wep, "review-policy.md"), "utf8")).toContain("CLI help");
     expect(await readFile(path.join(snapshot.worktreePath, task.taskDir, "task.md"), "utf8")).toContain(passCommand);
     expect(await pathExists(path.join(snapshot.worktreePath, other?.taskDir ?? "missing"))).toBe(false);
     expect(await pathExists(path.join(wep, "local"))).toBe(false);
