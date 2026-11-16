@@ -763,6 +763,42 @@ Generated agent files are kept. Enable, disable, and status accept `--json`, `--
 Enabling requires the installed judge contract and safe local ignore; follow the reported
 `wep upgrade` or `wep doctor --fix` instruction if either is missing.
 
+## Harness outside Git
+
+By default the judge expects the harness to be versioned with the project. The snapshot takes
+`.wep/policy.json` and the task capsule from Git, like any other file. Some projects keep
+`.wep/` out of Git: task capsules that must not be public with the code, a security fix that
+cannot be described before the patch ships, or a harness kept in a separate private repository
+and linked as a `.wep` symlink. For those, set the harness mode:
+
+```bash
+wep config set agents.judge.harness ignored
+```
+
+| Mode | What Git versions | What the snapshot takes from the live workspace |
+| --- | --- | --- |
+| `repo` (default) | `.wep/` with the project, except `.wep/local/` | Nothing extra: the harness comes from Git |
+| `ignored` | Nothing under `.wep/` | `.wep/policy.json`, `.wep/config.json`, the reviewed task capsule and every `--include-task` capsule |
+
+In `ignored` mode:
+
+- The control files are copied as real files, also when `.wep` is a symlink to a directory
+  outside the project. The snapshot never contains a link to that directory.
+- Nothing under `.wep/local/`, no other task capsule, and no path blocked by `policy.json` is
+  copied. The wiki, the manifest and the schemas stay out of the snapshot.
+- The copied files are part of the snapshot's integrity digests. Editing one inside the snapshot
+  fails the integrity check, and editing the live capsule after capture moves `wep judge current`
+  away from `CURRENT`, exactly as a code change would.
+- The mode is recorded in `snapshot.json` as `"harness": "ignored"`. A snapshot captured in
+  `repo` mode carries no such field. A catch-up snapshot must use the same mode as its parent.
+
+When `.wep/` is ignored by Git and the mode is still `repo`, `wep judge snapshot` stops and says
+so, instead of failing later on a missing `policy.json`. Choose `ignored`, or stop ignoring
+`.wep/`.
+
+Keeping the harness out of Git also takes it out of Git's history and backups. Version it
+somewhere else, for example in a private repository linked as `.wep`, so capsules are not lost.
+
 ## Setting a model
 
 The model is configuration, not a file edit. `wep upgrade` regenerates the agent files

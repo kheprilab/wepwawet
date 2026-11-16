@@ -12,13 +12,14 @@ import type {
   AgentTarget,
   AgentsConfig,
   AppliedTemplatePack,
+  JudgeHarnessMode,
   ModuleName,
   Target,
   WepConfig,
   Workflow,
   WorkflowDefault,
 } from "./types.js";
-import { agentNames, moduleNames, targets, workflows } from "./types.js";
+import { agentNames, judgeHarnessModes, moduleNames, targets, workflows } from "./types.js";
 
 const configPath = ".wep/config.json";
 
@@ -44,7 +45,21 @@ const validConfigKeys = [
   "defaults.contextBudget",
   ...agentConfigKeys,
   "agents.implementer.maxAttempts",
+  "agents.judge.harness",
 ] as const;
+
+/** The judge harness mode a config selects; an absent config or field means `repo`. */
+export function judgeHarnessMode(config: WepConfig | undefined): JudgeHarnessMode {
+  return config?.agents?.judge?.harness ?? "repo";
+}
+
+function requireJudgeHarnessMode(value: unknown): JudgeHarnessMode {
+  const mode = typeof value === "string" ? value.trim() : value;
+  if (!(judgeHarnessModes as readonly unknown[]).includes(mode)) {
+    throw new Error('.wep/config.json — agents.judge.harness must be "repo" or "ignored".');
+  }
+  return mode as JudgeHarnessMode;
+}
 
 /**
  * Read the project config, distinguishing a missing config (returns undefined) from an
@@ -181,6 +196,13 @@ function normalizeAgents(value: unknown): AgentsConfig | undefined {
         throw new Error(".wep/config.json — maxAttempts is only valid on agents.implementer.");
       }
       normalized.maxAttempts = requireMaxAttempts(entry.maxAttempts);
+    }
+
+    if (entry.harness !== undefined) {
+      if (name !== "judge") {
+        throw new Error(".wep/config.json — harness is only valid on agents.judge.");
+      }
+      normalized.harness = requireJudgeHarnessMode(entry.harness);
     }
 
     result[name] = normalized;
@@ -321,6 +343,7 @@ async function writeAgentKey(
   else if (field === "trigger") patch.trigger = value.trim();
   else if (field === "targets") patch.targets = parseTargets(value);
   else if (field === "maxAttempts") patch.maxAttempts = requireMaxAttempts(value);
+  else if (field === "harness") patch.harness = requireJudgeHarnessMode(value);
   else if (field === "model" && target) {
     patch.model = { ...(config.agents?.[name]?.model ?? {}), [target]: value.trim() };
   }

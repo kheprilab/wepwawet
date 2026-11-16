@@ -311,6 +311,7 @@ setting when present, then the built-in fallback.
 | `targets` | Narrows emission to a subset of the installed targets. |
 | `model` | Per target: `{ "claude": …, "codex": …, "copilot": … }`. |
 | `maxAttempts` | `implementer` only. Positive integer, default `3`. |
+| `harness` | `judge` only. `repo` (default) or `ignored`: whether the harness control files are versioned with the project. Any other value is an error. See [JUDGE.md](JUDGE.md#harness-outside-git). |
 
 Set any of them from the CLI:
 
@@ -320,6 +321,7 @@ wep config set agents.judge.trigger post-implementation
 wep config set agents.judge.targets "claude, codex"
 wep config set agents.judge.model.claude opus
 wep config set agents.implementer.maxAttempts 3
+wep config set agents.judge.harness ignored
 ```
 
 ### Implementer trigger semantics

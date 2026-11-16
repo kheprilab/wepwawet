@@ -20,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { judgeHarnessMode, readConfig } from "./config.js";
 import { readTaskContinuation } from "./continuation.js";
 import type { JudgeScope } from "./judge-enforcement.js";
 import { measureJudgePhase } from "./judge-timings.js";
@@ -50,6 +51,11 @@ export interface JudgeSnapshotMetadata {
   scope: JudgeScope;
   emptyBoundaryAuthorized: boolean;
   parent?: JudgeSnapshotParent;
+  /**
+   * Present only when the capture ran with `agents.judge.harness: "ignored"`. Absent means `repo`,
+   * so snapshots taken in `repo` mode keep exactly the metadata they always had.
+   */
+  harness?: "ignored";
 }
 
 export interface JudgeSnapshot {
@@ -104,6 +110,7 @@ export interface JudgeSnapshotValidationWorkspace {
 }
 
 interface CaptureParent extends JudgeSnapshotParent {
+  harness?: "ignored";
   worktreePath: string;
   manifest: Map<string, PathFingerprint>;
 }
@@ -170,6 +177,7 @@ export async function captureJudgeCatchUpSnapshot(
     recordDigest: hash([recordBytes]),
     worktreePath: loaded.worktreePath,
     manifest: loaded.manifest,
+    ...(loaded.metadata.harness ? { harness: loaded.metadata.harness } : {}),
   };
   return capture(
     cwd,
@@ -233,6 +241,10 @@ async function loadJudgeSnapshotInternal(
   ) {
     throw new Error("Snapshot integrity check failed: metadata shape or identity is invalid.");
   }
+  if (metadata.harness !== undefined && metadata.harness !== "ignored") {
+    throw new Error("Snapshot integrity check failed: metadata shape or identity is invalid.");
+  }
+  const control = harnessControl(metadata);
   let workspace: Map<string, PathFingerprint>;
   try {
     const dependencyInfo = await lstat(path.join(worktreePath, "node_modules")).catch(() => undefined);
@@ -244,7 +256,7 @@ async function loadJudgeSnapshotInternal(
     if (JSON.stringify(currentBlockedPatterns) !== JSON.stringify(snapshotBlockedPatterns)) {
       throw new Error("blocked-read policy changed after capture; capture a new snapshot");
     }
-    workspace = await workspaceManifest(worktreePath, snapshotBlockedPatterns);
+    workspace = await workspaceManifest(worktreePath, snapshotBlockedPatterns, control);
   } catch (error) {
     throw new Error(`Snapshot integrity check failed: ${messageOf(error)}`);
   }
@@ -317,7 +329,7 @@ export async function checkJudgeSnapshotCurrentState(
       snapshot.metadata.sourceScope.includedTaskIds,
     );
     const blockedPatterns = await readBlockedPatterns(snapshot.worktreePath);
-    const liveManifest = await workspaceManifest(cwd, blockedPatterns);
+    const liveManifest = await workspaceManifest(cwd, blockedPatterns, harnessControl(snapshot.metadata));
     const changedFiles = changedManifestPaths(snapshot.manifest, liveManifest);
     const isCurrent = sameLiveBoundary(current, snapshot.metadata.sourceScope) && changedFiles.length === 0;
 
@@ -542,6 +554,18 @@ async function capture(
   includedTaskIds: string[] = [],
   allowEmpty = false,
 ): Promise<JudgeSnapshot> {
+  const ignoredHarness = judgeHarnessMode(await readConfig(cwd)) === "ignored";
+  if (parent && (parent.harness === "ignored") !== ignoredHarness) {
+    throw new Error(
+      "agents.judge.harness changed since the parent review was captured. Capture a new full snapshot with `wep judge snapshot` instead of a catch-up.",
+    );
+  }
+  if (!ignoredHarness && (await harnessIgnoredByGit(cwd))) {
+    throw new Error(
+      "Cannot capture a judge snapshot: .wep/ is ignored by Git, so the snapshot cannot take the policy and the task capsule from Git. If the harness is intentionally kept out of Git, run `wep config set agents.judge.harness ignored`; otherwise stop ignoring .wep/.",
+    );
+  }
+  const control: HarnessControl | undefined = ignoredHarness ? { taskIds: [taskId, ...includedTaskIds] } : undefined;
   const snapshotsRoot = path.join(cwd, SNAPSHOT_ROOT);
   await mkdir(snapshotsRoot, { recursive: true });
   const { createJudgeScope } = await import("./judge-enforcement.js");
@@ -565,6 +589,7 @@ async function capture(
       await removeBlockedPaths(worktreePath, blockedPatterns);
       await overlayChangedFiles(cwd, worktreePath, sourceScope.changedFiles);
       await restorePackageManagerState(cwd, worktreePath);
+      if (control) await copyHarnessControl(cwd, worktreePath, control, blockedPatterns);
 
       const after = await createJudgeScope(cwd, taskId, sourceScope.baseCommit, "WORKTREE", includedTaskIds);
       if (!sameLiveBoundary(after, sourceScope)) {
@@ -573,8 +598,8 @@ async function capture(
       }
 
       const snapshotBlockedPatterns = await readBlockedPatterns(worktreePath);
-      const manifest = await workspaceManifest(worktreePath, snapshotBlockedPatterns);
-      const liveManifest = await workspaceManifest(cwd, snapshotBlockedPatterns);
+      const manifest = await workspaceManifest(worktreePath, snapshotBlockedPatterns, control);
+      const liveManifest = await workspaceManifest(cwd, snapshotBlockedPatterns, control);
       const finalSourceScope = await createJudgeScope(cwd, taskId, sourceScope.baseCommit, "WORKTREE", includedTaskIds);
       if (!sameLiveBoundary(finalSourceScope, sourceScope)) {
         await measureJudgePhase("cleanup", () => rm(temporaryRoot, { recursive: true, force: true }));
@@ -632,6 +657,7 @@ async function capture(
         scope,
         parent: parentRecord,
         emptyBoundaryAuthorized: persistedSourceScope.emptyBoundaryAuthorized,
+        ...(control ? { harness: "ignored" as const } : {}),
       };
       await writeFile(path.join(temporaryRoot, "snapshot.json"), `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
       finalRoot = path.join(snapshotsRoot, id);
@@ -725,13 +751,28 @@ async function restorePackageManagerState(sourceRoot: string, snapshotRoot: stri
   }
 }
 
-async function workspaceManifest(root: string, blockedPatterns: string[]): Promise<Map<string, PathFingerprint>> {
+async function workspaceManifest(
+  root: string,
+  blockedPatterns: string[],
+  control?: HarnessControl,
+): Promise<Map<string, PathFingerprint>> {
   const raw = await git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
-  const paths = raw.split("\0").filter(Boolean).sort();
+  // With an ignored harness, what Git sees under .wep differs between the live tree and the snapshot
+  // repository (which inherits no .git/info/exclude), so .wep is covered only by the explicit list.
+  const paths = raw
+    .split("\0")
+    .filter(Boolean)
+    .filter((relativePath) => !control || !isHarnessPath(relativePath))
+    .sort();
   const manifest = new Map<string, PathFingerprint>();
   for (const relativePath of paths) {
     if (relativePath === "node_modules" && (await lstat(path.join(root, relativePath))).isSymbolicLink()) continue;
     await addManifestPath(root, relativePath, blockedPatterns, manifest);
+  }
+  if (control) {
+    for (const relativePath of await harnessControlPaths(root, control, blockedPatterns)) {
+      await addManifestPath(root, relativePath, blockedPatterns, manifest);
+    }
   }
 
   const directories = new Set<string>();
@@ -744,6 +785,9 @@ async function workspaceManifest(root: string, blockedPatterns: string[]): Promi
   }
   for (const dir of [...directories].sort()) {
     if (manifest.has(dir)) continue;
+    // Live, .wep may be a symlink to a directory outside the project; in the snapshot it is a real
+    // directory. Its own entry would differ only by type, so an ignored harness leaves it out.
+    if (control && dir === HARNESS_ROOT) continue;
     const info = await lstat(path.join(root, dir)).catch(() => undefined);
     if (!info || !info.isDirectory()) continue;
     manifest.set(dir, { content: "dir", stat: statOf(info) });
@@ -817,6 +861,86 @@ function workspaceDigest(manifest: Map<string, PathFingerprint>): string {
  * An absent, irregular, invalid, or unsupported sidecar returns `null` and stays inside the
  * reviewable content like any ordinary tracked file.
  */
+const HARNESS_ROOT = ".wep";
+const HARNESS_CONTROL_FILES = [".wep/config.json", ".wep/policy.json"];
+
+/** The control files an ignored harness adds to the snapshot: config, policy and the reviewed capsules. */
+interface HarnessControl {
+  taskIds: string[];
+}
+
+function harnessControl(metadata: JudgeSnapshotMetadata): HarnessControl | undefined {
+  return metadata.harness === "ignored"
+    ? { taskIds: [metadata.taskId, ...metadata.sourceScope.includedTaskIds] }
+    : undefined;
+}
+
+function isHarnessPath(relativePath: string): boolean {
+  return relativePath === HARNESS_ROOT || relativePath.startsWith(`${HARNESS_ROOT}/`);
+}
+
+/**
+ * Every control file under `root`, sorted. Capsule directories are matched the way task commands
+ * match them (`TASK-001` or `TASK-001-slug`). Nothing under `.wep/local/` and nothing blocked by
+ * policy is ever listed. Paths are resolved through a `.wep` symlink.
+ */
+async function harnessControlPaths(
+  root: string,
+  control: HarnessControl,
+  blockedPatterns: string[],
+): Promise<string[]> {
+  const paths = new Set(HARNESS_CONTROL_FILES);
+  const tasksRoot = path.join(root, HARNESS_ROOT, "tasks");
+  const entries = await readdir(tasksRoot, { withFileTypes: true }).catch(() => []);
+  for (const taskId of new Set(control.taskIds)) {
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !(entry.name === taskId || entry.name.startsWith(`${taskId}-`))) continue;
+      for (const file of await listFiles(root, path.posix.join(HARNESS_ROOT, "tasks", entry.name))) paths.add(file);
+    }
+  }
+  return [...paths]
+    .filter((relativePath) => !relativePath.startsWith(`${HARNESS_ROOT}/local/`))
+    .filter((relativePath) => !blockedPatterns.some((pattern) => matchesBlockedPattern(relativePath, pattern)))
+    .sort();
+}
+
+async function listFiles(root: string, relativeDir: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(path.join(root, relativeDir), { withFileTypes: true })) {
+    const relativePath = path.posix.join(relativeDir, entry.name);
+    if (entry.isDirectory()) files.push(...(await listFiles(root, relativePath)));
+    else files.push(relativePath);
+  }
+  return files;
+}
+
+/** Copy the control files from the live workspace, as real files even when `.wep` is a symlink. */
+async function copyHarnessControl(
+  sourceRoot: string,
+  snapshotRoot: string,
+  control: HarnessControl,
+  blockedPatterns: string[],
+): Promise<void> {
+  const snapshotHarness = path.join(snapshotRoot, HARNESS_ROOT);
+  if ((await lstat(snapshotHarness).catch(() => undefined))?.isSymbolicLink()) await rm(snapshotHarness);
+  for (const relativePath of await harnessControlPaths(sourceRoot, control, blockedPatterns)) {
+    const source = path.join(sourceRoot, relativePath);
+    if (!(await stat(source).catch(() => undefined))?.isFile()) continue;
+    const destination = path.join(snapshotRoot, relativePath);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await rm(destination, { recursive: true, force: true });
+    await copyFile(source, destination);
+  }
+}
+
+/** True when Git ignores the harness policy, directly or through an ignored `.wep` symlink. */
+async function harnessIgnoredByGit(cwd: string): Promise<boolean> {
+  const info = await lstat(path.join(cwd, HARNESS_ROOT)).catch(() => undefined);
+  if (!info) return false;
+  if (info.isSymbolicLink()) return gitExitZero(cwd, ["check-ignore", "-q", "--", HARNESS_ROOT]);
+  return gitExitZero(cwd, ["check-ignore", "-q", "--", ".wep/policy.json"]);
+}
+
 export async function reviewSidecarExclusion(worktreePath: string, taskId: string): Promise<string | null> {
   try {
     const result = await readTaskContinuation(worktreePath, taskId);
@@ -853,7 +977,11 @@ export async function liveContentState(
   cwd: string,
   snapshot: LoadedJudgeSnapshot,
 ): Promise<{ digest: string; manifest: Map<string, PathFingerprint> }> {
-  const manifest = await workspaceManifest(cwd, await readBlockedPatterns(snapshot.worktreePath));
+  const manifest = await workspaceManifest(
+    cwd,
+    await readBlockedPatterns(snapshot.worktreePath),
+    harnessControl(snapshot.metadata),
+  );
   return { digest: contentDigest(manifest), manifest };
 }
 
