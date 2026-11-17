@@ -41,6 +41,14 @@ export type AgentTarget = Exclude<Target, "pi">;
 
 export type AgentModelConfig = Partial<Record<AgentTarget, string>>;
 
+/**
+ * Where the judge finds the harness control files. `repo`: they are versioned with the project and
+ * the snapshot takes them from Git. `ignored`: Git does not see `.wep/`, so the snapshot copies them
+ * from the live workspace.
+ */
+export const judgeHarnessModes = ["repo", "ignored"] as const;
+export type JudgeHarnessMode = (typeof judgeHarnessModes)[number];
+
 export interface AgentEntryConfig {
   enabled?: boolean;
   trigger?: string;
@@ -48,6 +56,8 @@ export interface AgentEntryConfig {
   model?: AgentModelConfig;
   /** Implementer only. Positive integer; an invalid value is an error, not a warning. */
   maxAttempts?: number;
+  /** Judge only. An unknown value is an error: falling back would silently change what is reviewed. */
+  harness?: JudgeHarnessMode;
 }
 
 export interface AgentsConfig {
