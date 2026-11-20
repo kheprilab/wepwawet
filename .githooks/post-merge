@@ -1,0 +1,25 @@
+#!/bin/sh
+# Refresh the stable wep build used by this repository's own harness hooks (dogfooding).
+# Does nothing without a local harness. Runs the promote script as it is on origin/main, not
+# the working tree, in the background; it never fails the merge.
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -f "$root/.wep/config.json" ] || exit 0
+
+mkdir -p "$root/.wep/local" || exit 0
+# Node needs the .mjs extension to load the script as a module.
+dir=$(mktemp -d "${TMPDIR:-/tmp}/wep-dogfood-promote.XXXXXX") || exit 0
+script="$dir/dogfood-promote.mjs"
+if ! git -C "$root" show origin/main:scripts/dogfood-promote.mjs >"$script" 2>/dev/null; then
+  rm -rf "$dir"
+  exit 0
+fi
+
+(
+  cd "$root" || exit 0
+  echo "== $(date -u +%Y-%m-%dT%H:%M:%SZ) post-merge"
+  node "$script" --no-fetch
+  rm -rf "$dir"
+) >>"$root/.wep/local/dogfood-promote.log" 2>&1 </dev/null &
+
+exit 0
