@@ -7,7 +7,6 @@
       "package-name": "wepwawet",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
-      "release-as": "0.8.0",
       "extra-files": [{ "type": "generic", "path": "src/version.ts" }]
     }
   }
