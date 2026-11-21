@@ -792,9 +792,21 @@ In `ignored` mode:
 - The mode is recorded in `snapshot.json` as `"harness": "ignored"`. A snapshot captured in
   `repo` mode carries no such field. A catch-up snapshot must use the same mode as its parent.
 
-When `.wep/` is ignored by Git and the mode is still `repo`, `wep judge snapshot` stops and says
-so, instead of failing later on a missing `policy.json`. Choose `ignored`, or stop ignoring
-`.wep/`.
+Capture checks that the Git setup matches the mode before it copies anything:
+
+- In `repo` mode, `wep judge snapshot` stops when Git ignores a `.wep` symlink, `.wep/policy.json`,
+  or any file of the reviewed or an `--include-task` capsule, instead of failing later on a missing
+  file. Choose `ignored`, or stop ignoring those paths.
+- In `ignored` mode, it stops when Git sees any path under `.wep` (tracked, or untracked and not
+  ignored, including a visible `.wep` symlink). Those paths would be outside the snapshot's digests.
+  Keep `.wep/` entirely out of Git, or switch to `repo`.
+- In `ignored` mode, a control file, a file inside a reviewed capsule, or a reviewed capsule
+  directory that is a symlink stops the capture with the path named. The snapshot copies these as
+  regular files, so a link could never match its capture. Replace it with a regular file or directory.
+- Capture reads `.wep/config.json` in both modes to know which one applies. If the config cannot be
+  read, capture stops and names the file; fix it or restore it from Git.
+
+`wep doctor` reports the first two cases as warnings, so they show up before the first review.
 
 Keeping the harness out of Git also takes it out of Git's history and backups. Version it
 somewhere else, for example in a private repository linked as `.wep`, so capsules are not lost.
