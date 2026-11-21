@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/kheprilab/wepwawet/compare/wepwawet-v0.8.0...wepwawet-v0.9.0) (2026-11-21)
+
+
+### Features
+
+* **doctor:** accept or reject suggested merges per block ([#41](https://github.com/kheprilab/wepwawet/issues/41)) ([f44be8a](https://github.com/kheprilab/wepwawet/commit/f44be8a0e00fbaee46640548a741aa78d9bfa2c9))
+* **judge:** check the harness Git setup before snapshot capture ([#43](https://github.com/kheprilab/wepwawet/issues/43)) ([30095db](https://github.com/kheprilab/wepwawet/commit/30095db7027da81cf5d30e77522f90a37c58157d))
+* support judge review when the harness is not versioned ([#27](https://github.com/kheprilab/wepwawet/issues/27)) ([0392093](https://github.com/kheprilab/wepwawet/commit/039209342af6c1d056cec0d9961c82ed16fd4291))
+
+
+### Bug Fixes
+
+* clarify comprehension eligibility for continuation-only changes ([#30](https://github.com/kheprilab/wepwawet/issues/30)) ([3378d3e](https://github.com/kheprilab/wepwawet/commit/3378d3eaa80b7a1ce00ea0c9ad01714ab44a46b7))
+
 ## [0.8.0](https://github.com/kheprilab/wepwawet/compare/wepwawet-v0.0.1...wepwawet-v0.8.0) (2026-11-09)
 
 
