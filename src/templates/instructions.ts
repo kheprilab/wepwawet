@@ -176,11 +176,11 @@ Apply this rubric before proposing a merge. Record verdicts, evidence, and desti
 
 Protected files remain deny-by-default. When a matching \`.wep.suggested.md\` file exists:
 
-1. Compare it with the protected instruction file and derive the smallest semantic merge; never replace project-specific instructions with the whole suggestion.
-2. Show the exact proposed diff and explain each change briefly. Do not edit the protected file yet.
-3. Ask for explicit human approval of that exact diff. Approval is valid only in the current conversation. Silence, approval from another session, or a broad request such as "fix everything" is not approval.
-4. If approved, apply only the shown changes directly to the protected file. If either file changed or the patch must change, stop, show a fresh diff, and ask again.
-5. Show the resulting diff, verify the intended instructions are present, rerun \`wep doctor\`, and remove the matching suggested file only after the merge is verified.
+1. Run \`wep doctor merge <file>\`. It lists each pending block (one \`##\` section of the suggestion) with its diff against the protected file. Never replace project-specific instructions with the whole suggestion.
+2. Show those blocks and diffs and explain each change briefly. Do not edit the protected file yet.
+3. Ask for explicit human approval, block by block: accept or reject. Approval is valid only in the current conversation. Silence, approval from another session, or a broad request such as "fix everything" is not approval.
+4. Run \`wep doctor merge <file> --accept <block>\` for each approved block and \`--reject <block>\` for each declined one. A rejected block is not proposed again until its content changes. If a block needs an edit the command cannot make, show the exact diff, get approval for that diff, and apply only that change by hand.
+5. Show the resulting diff and rerun \`wep doctor\`. The command removes the suggested file once no block is pending.
 
 This is the only Doctor exception to \`protectedFiles\` and \`writePolicy.doctor\`. Never use \`--force\` to bypass it.`;
 const taskBody = `Turn the request into a task capsule with goal, scope, context, explicit workflow choice, acceptance criteria, validation commands, and an implementation brief.

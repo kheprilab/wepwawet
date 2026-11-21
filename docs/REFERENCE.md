@@ -194,7 +194,7 @@ wep preserves existing agent instructions. If `AGENTS.md`, `CLAUDE.md`, or `.git
 
 Semantic Doctor may also document verified project knowledge in `.wep/wiki/architecture.md`, `conventions.md`, `testing.md`, and `decisions.md`. Upgrade adds these paths when the Doctor write policy retains all previous default destinations, preserving custom entries and wiki content. More restrictive policies are left unchanged and require a manual update if those destinations are wanted.
 
-For a protected-file suggestion, the Doctor agent compares the protected file with its candidate and shows an exact minimal diff. It may edit the protected file only after you explicitly approve that diff in the current conversation; changed proposals require fresh approval.
+For a protected-file suggestion, `wep doctor merge [file]` splits the candidate into blocks, one per `##` section, and lists each pending block with its diff. After you approve a block in the current conversation, the agent runs `wep doctor merge <file> --accept <block>` to write it, or `--reject <block>` to decline it. Rejections are stored in `.wep/doctor/merge-decisions.json` with the block's content hash and come back only when the block changes. The candidate is removed once no block is pending. Use `--dry-run` to preview and `--json` for scripting. Changed proposals require fresh approval.
 
 ## Applying templates after init
 
