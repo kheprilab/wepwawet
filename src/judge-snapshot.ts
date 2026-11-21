@@ -554,18 +554,43 @@ async function capture(
   includedTaskIds: string[] = [],
   allowEmpty = false,
 ): Promise<JudgeSnapshot> {
-  const ignoredHarness = judgeHarnessMode(await readConfig(cwd)) === "ignored";
+  let config: Awaited<ReturnType<typeof readConfig>>;
+  try {
+    config = await readConfig(cwd);
+  } catch (error) {
+    // The harness mode lives in the config, so capture cannot choose what to take from Git without it.
+    throw new Error(
+      `Cannot capture a judge snapshot: .wep/config.json could not be read, and the harness mode depends on it. ${messageOf(error)}`,
+    );
+  }
+  const ignoredHarness = judgeHarnessMode(config) === "ignored";
   if (parent && (parent.harness === "ignored") !== ignoredHarness) {
     throw new Error(
       "agents.judge.harness changed since the parent review was captured. Capture a new full snapshot with `wep judge snapshot` instead of a catch-up.",
     );
   }
-  if (!ignoredHarness && (await harnessIgnoredByGit(cwd))) {
-    throw new Error(
-      "Cannot capture a judge snapshot: .wep/ is ignored by Git, so the snapshot cannot take the policy and the task capsule from Git. If the harness is intentionally kept out of Git, run `wep config set agents.judge.harness ignored`; otherwise stop ignoring .wep/.",
-    );
-  }
   const control: HarnessControl | undefined = ignoredHarness ? { taskIds: [taskId, ...includedTaskIds] } : undefined;
+  if (!control) {
+    const ignored = await ignoredHarnessPaths(cwd, [taskId, ...includedTaskIds]);
+    if (ignored.length > 0) {
+      throw new Error(
+        `Cannot capture a judge snapshot: .wep/ is ignored by Git, so the snapshot cannot take the policy and the task capsule from Git (ignored: ${listPaths(ignored)}). If the harness is intentionally kept out of Git, run \`wep config set agents.judge.harness ignored\`; otherwise stop ignoring .wep/.`,
+      );
+    }
+  } else {
+    const visible = await visibleHarnessPaths(cwd);
+    if (visible.length > 0) {
+      throw new Error(
+        `Cannot capture a judge snapshot: agents.judge.harness is ignored, but Git sees paths under .wep (${listPaths(visible)}). Those paths would be outside the snapshot's digests. Keep .wep/ entirely out of Git (untrack and ignore it), or run \`wep config set agents.judge.harness repo\` to version the whole harness.`,
+      );
+    }
+    const linked = await symlinkedHarnessControlPaths(cwd, control, await readBlockedPatterns(cwd));
+    if (linked.length > 0) {
+      throw new Error(
+        `Cannot capture a judge snapshot: ${listPaths(linked)} ${linked.length === 1 ? "is a symlink" : "are symlinks"} in the harness control files or a reviewed task capsule. With agents.judge.harness ignored the snapshot copies these as regular files, so a link cannot match its capture. Replace each one with a regular file or directory.`,
+      );
+    }
+  }
   const snapshotsRoot = path.join(cwd, SNAPSHOT_ROOT);
   await mkdir(snapshotsRoot, { recursive: true });
   const { createJudgeScope } = await import("./judge-enforcement.js");
@@ -895,7 +920,7 @@ async function harnessControlPaths(
   const entries = await readdir(tasksRoot, { withFileTypes: true }).catch(() => []);
   for (const taskId of new Set(control.taskIds)) {
     for (const entry of entries) {
-      if (!entry.isDirectory() || !(entry.name === taskId || entry.name.startsWith(`${taskId}-`))) continue;
+      if (!entry.isDirectory() || !matchesTaskDir(entry.name, taskId)) continue;
       for (const file of await listFiles(root, path.posix.join(HARNESS_ROOT, "tasks", entry.name))) paths.add(file);
     }
   }
@@ -934,12 +959,78 @@ async function copyHarnessControl(
   }
 }
 
-/** True when Git ignores the harness policy, directly or through an ignored `.wep` symlink. */
-async function harnessIgnoredByGit(cwd: string): Promise<boolean> {
+/**
+ * Harness paths Git ignores, so a repo-mode snapshot taken from Git would miss them: an ignored
+ * `.wep` symlink, an ignored policy, or ignored files in a task capsule (only `taskIds` when given,
+ * every capsule otherwise). Outside a Git repository nothing is reported.
+ */
+export async function ignoredHarnessPaths(cwd: string, taskIds?: string[]): Promise<string[]> {
   const info = await lstat(path.join(cwd, HARNESS_ROOT)).catch(() => undefined);
-  if (!info) return false;
-  if (info.isSymbolicLink()) return gitExitZero(cwd, ["check-ignore", "-q", "--", HARNESS_ROOT]);
-  return gitExitZero(cwd, ["check-ignore", "-q", "--", ".wep/policy.json"]);
+  if (!info) return [];
+  if (info.isSymbolicLink()) {
+    return (await gitExitZero(cwd, ["check-ignore", "-q", "--", HARNESS_ROOT])) ? [HARNESS_ROOT] : [];
+  }
+  const ignored = new Set<string>();
+  if (await gitExitZero(cwd, ["check-ignore", "-q", "--", ".wep/policy.json"])) ignored.add(".wep/policy.json");
+  const capsules = (await readdir(path.join(cwd, HARNESS_ROOT, "tasks"), { withFileTypes: true }).catch(() => []))
+    .filter((entry) => entry.isDirectory() && (!taskIds || taskIds.some((id) => matchesTaskDir(entry.name, id))))
+    .map((entry) => path.posix.join(HARNESS_ROOT, "tasks", entry.name));
+  if (capsules.length > 0) {
+    const listed = await git(cwd, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "-z",
+      "--",
+      ...capsules,
+    ]).catch(() => "");
+    for (const relativePath of listed.split("\0").filter(Boolean)) ignored.add(relativePath);
+  }
+  return [...ignored].sort();
+}
+
+/**
+ * Paths under `.wep` that Git sees (tracked, or untracked and not ignored), including a visible
+ * `.wep` symlink. An ignored harness drops them from the digests, so it must have none.
+ */
+export async function visibleHarnessPaths(cwd: string): Promise<string[]> {
+  const listed = await git(cwd, [
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "-z",
+    "--",
+    HARNESS_ROOT,
+  ]).catch(() => "");
+  return [...new Set(listed.split("\0").filter(Boolean))].sort();
+}
+
+/** Control files, capsule files and capsule directories that are symlinks, which an ignored harness cannot copy. */
+async function symlinkedHarnessControlPaths(
+  root: string,
+  control: HarnessControl,
+  blockedPatterns: string[],
+): Promise<string[]> {
+  const linked = new Set<string>();
+  for (const relativePath of await harnessControlPaths(root, control, blockedPatterns)) {
+    if ((await lstat(path.join(root, relativePath)).catch(() => undefined))?.isSymbolicLink()) linked.add(relativePath);
+  }
+  for (const entry of await readdir(path.join(root, HARNESS_ROOT, "tasks"), { withFileTypes: true }).catch(() => [])) {
+    if (entry.isSymbolicLink() && control.taskIds.some((id) => matchesTaskDir(entry.name, id))) {
+      linked.add(path.posix.join(HARNESS_ROOT, "tasks", entry.name));
+    }
+  }
+  return [...linked].sort();
+}
+
+function matchesTaskDir(name: string, taskId: string): boolean {
+  return name === taskId || name.startsWith(`${taskId}-`);
+}
+
+function listPaths(paths: string[]): string {
+  return paths.length > 8 ? `${paths.slice(0, 8).join(", ")} and ${paths.length - 8} more` : paths.join(", ");
 }
 
 /**

@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { agentFilePathList, agentWarningTexts, resolveAgents } from "./agents.js";
 import { isLocalIgnoreContentSafe, localIgnorePath } from "./comprehension.js";
-import { readConfig, readConfigForDiagnosis, writeConfig } from "./config.js";
+import { judgeHarnessMode, readConfig, readConfigForDiagnosis, writeConfig } from "./config.js";
 import { detectTargets } from "./detect.js";
 import { pendingBlockCount } from "./doctor-merge.js";
 import { listDirs, pathExists, writePlannedFile } from "./fs-utils.js";
@@ -16,6 +16,7 @@ import {
 } from "./harness-files.js";
 import { implLogPath } from "./impl.js";
 import { runInit } from "./init.js";
+import { ignoredHarnessPaths, visibleHarnessPaths } from "./judge-snapshot.js";
 import {
   agentSetupTemplate,
   defaultConfig,
@@ -219,6 +220,7 @@ async function diagnose(cwd: string, options: CommandOptions): Promise<DoctorRes
   const installed = await pathExists(path.join(cwd, ".wep/config.json"));
   const agentGaps = await getAgentGaps(cwd, activeModules);
   const agentConfigWarnings = await getAgentWarnings(cwd, activeModules);
+  const harnessWarnings = judgeInstalled ? await getJudgeHarnessWarnings(cwd, config) : [];
   const wikiLint =
     installed && tasksInstalled ? await lintWiki(cwd) : { brokenLinks: [], orphans: [], missingTimestamps: [] };
   const wikiLintIssueCount = wikiLint.brokenLinks.length + wikiLint.missingTimestamps.length;
@@ -228,6 +230,7 @@ async function diagnose(cwd: string, options: CommandOptions): Promise<DoctorRes
   const suggestions: Suggestion[] = [
     ...buildSuggestions(installed, installedTargets, allMissing, conflicts, installedVersion, agentGaps),
     ...agentConfigWarnings.map((text) => ({ text, severity: "warning" as const })),
+    ...harnessWarnings.map((text) => ({ text, severity: "warning" as const })),
     ...(wikiLintIssueCount > 0
       ? [
           {
@@ -496,6 +499,27 @@ async function getAgentGaps(cwd: string, activeModules: readonly ModuleName[]): 
     }
   }
   return gaps;
+}
+
+/** Git setups that `wep judge snapshot` would reject, reported before the first review. */
+async function getJudgeHarnessWarnings(cwd: string, config: Awaited<ReturnType<typeof readConfigForDiagnosis>>) {
+  if (!config) return [];
+  const show = (paths: string[]) =>
+    paths.length > 5 ? `${paths.slice(0, 5).join(", ")} and ${paths.length - 5} more` : paths.join(", ");
+  if (judgeHarnessMode(config) === "repo") {
+    const ignored = await ignoredHarnessPaths(cwd);
+    return ignored.length > 0
+      ? [
+          `Git ignores part of the harness (${show(ignored)}) while agents.judge.harness is repo, so \`wep judge snapshot\` cannot take it from Git. If the harness is intentionally kept out of Git, run \`wep config set agents.judge.harness ignored\`; otherwise stop ignoring .wep/.`,
+        ]
+      : [];
+  }
+  const visible = await visibleHarnessPaths(cwd);
+  return visible.length > 0
+    ? [
+        `agents.judge.harness is ignored, but Git sees paths under .wep (${show(visible)}), so \`wep judge snapshot\` will refuse to capture. Keep .wep/ entirely out of Git, or run \`wep config set agents.judge.harness repo\`.`,
+      ]
+    : [];
 }
 
 async function getAgentWarnings(cwd: string, activeModules: readonly ModuleName[]): Promise<string[]> {

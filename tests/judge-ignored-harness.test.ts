@@ -1,7 +1,8 @@
-import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { judgeHarnessMode, normalizeConfig, readConfig, setConfigValue } from "../src/config.js";
+import { runDoctor } from "../src/doctor.js";
 import { pathExists } from "../src/fs-utils.js";
 import { runInit } from "../src/init.js";
 import { JUDGE_SCHEMA_VERSION, readAcceptanceCriteria, verifyJudgeRecord } from "../src/judge-enforcement.js";
@@ -26,7 +27,7 @@ async function git(cwd: string, args: string[]) {
  * repository does not inherit. Otherwise `.wep/` is listed in the project's `.gitignore`.
  */
 async function createIgnoredHarnessFixture(
-  options: { symlinked?: boolean; mode?: "repo" | "ignored"; otherTask?: boolean } = {},
+  options: { symlinked?: boolean; mode?: "repo" | "ignored"; otherTask?: boolean; gitignore?: string } = {},
 ) {
   const repo = path.join(tmp, "project");
   await mkdir(repo, { recursive: true });
@@ -49,11 +50,11 @@ async function createIgnoredHarnessFixture(
     await symlink(outside, path.join(repo, ".wep"));
     await writeFile(path.join(repo, ".git/info/exclude"), ".wep\n", "utf8");
   } else {
-    await writeFile(path.join(repo, ".gitignore"), ".wep/\n", "utf8");
+    await writeFile(path.join(repo, ".gitignore"), options.gitignore ?? ".wep/\n", "utf8");
   }
   await git(repo, ["add", "."]);
   await git(repo, ["commit", "-m", "base"]);
-  expect(await git(repo, ["ls-files", ".wep"])).toBe("");
+  if (options.gitignore === undefined) expect(await git(repo, ["ls-files", ".wep"])).toBe("");
   await writeFile(path.join(repo, "app.ts"), "export const value = 2;\n", "utf8");
   return { repo, task, other };
 }
@@ -225,3 +226,122 @@ describe("judge snapshot in ignored mode", () => {
     expect(verified.approved).toBe(true);
   });
 });
+
+describe("hardened harness checks (issue #28)", () => {
+  const harnessWarning = (suggestions: { text: string }[]) =>
+    suggestions.filter((suggestion) => /agents\.judge\.harness/.test(suggestion.text));
+
+  it("stops a repo-mode capture when only the task capsules are ignored", async () => {
+    const { repo, task } = await createIgnoredHarnessFixture({ mode: "repo", gitignore: ".wep/tasks/\n" });
+    expect(await git(repo, ["ls-files", ".wep/policy.json"])).not.toBe("");
+
+    const capture = captureJudgeSnapshot(repo, task.taskId, "HEAD");
+    await expect(capture).rejects.toThrow(/ignored by Git/);
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD")).rejects.toThrow(/agents\.judge\.harness ignored/);
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD")).rejects.toThrow(/task\.md/);
+  });
+
+  it("stops a repo-mode capture when an included capsule is ignored", async () => {
+    const { repo, task, other } = await createIgnoredHarnessFixture({ mode: "repo", otherTask: true, gitignore: "" });
+    if (!other) throw new Error("fixture must create a second task");
+    await writeFile(path.join(repo, ".gitignore"), `${other.taskDir}/\n`, "utf8");
+    await git(repo, ["rm", "-r", "-q", "--cached", other.taskDir]);
+
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD", [other.taskId])).rejects.toThrow(/ignored by Git/);
+  });
+
+  it("warns in doctor when Git ignores the harness in repo mode", async () => {
+    for (const gitignore of [".wep/\n", ".wep/tasks/\n"]) {
+      await rm(path.join(tmp, "project"), { recursive: true, force: true });
+      const { repo } = await createIgnoredHarnessFixture({ mode: "repo", gitignore });
+      const warnings = harnessWarning((await runDoctor({ cwd: repo })).suggestions);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].text).toMatch(/wep config set agents\.judge\.harness ignored/);
+      expect(warnings[0].text).toMatch(/stop ignoring \.wep\//);
+    }
+  });
+
+  it("reports no harness warning when the setup matches the mode", async () => {
+    const versioned = await createIgnoredHarnessFixture({ mode: "repo", gitignore: "" });
+    expect(harnessWarning((await runDoctor({ cwd: versioned.repo })).suggestions)).toEqual([]);
+
+    await rm(path.join(tmp, "project"), { recursive: true, force: true });
+    await rm(path.join(tmp, "outside"), { recursive: true, force: true });
+    const ignored = await createIgnoredHarnessFixture({ symlinked: true });
+    expect(harnessWarning((await runDoctor({ cwd: ignored.repo })).suggestions)).toEqual([]);
+  });
+
+  it("rejects an ignored-mode capture when Git sees paths under .wep, and doctor warns", async () => {
+    const { repo, task } = await createIgnoredHarnessFixture({ gitignore: ".wep/local/\n" });
+    expect(await git(repo, ["ls-files", ".wep/policy.json"])).not.toBe("");
+
+    const capture = captureJudgeSnapshot(repo, task.taskId, "HEAD");
+    await expect(capture).rejects.toThrow(/Git sees paths under \.wep \(\.wep\//);
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD")).rejects.toThrow(/agents\.judge\.harness repo/);
+    const warnings = harnessWarning((await runDoctor({ cwd: repo })).suggestions);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toMatch(/Git sees paths under \.wep/);
+  });
+
+  it("rejects an ignored-mode capture when a visible .wep symlink is untracked", async () => {
+    const { repo, task } = await createIgnoredHarnessFixture({ symlinked: true });
+    await writeFile(path.join(repo, ".git/info/exclude"), "", "utf8");
+
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD")).rejects.toThrow(
+      /Git sees paths under \.wep \(\.wep\)/,
+    );
+  });
+
+  it.each(["repo", "ignored"] as const)("names the config file when it is invalid in %s mode", async (mode) => {
+    const { repo, task } = await createIgnoredHarnessFixture({ mode, gitignore: mode === "repo" ? "" : undefined });
+    await writeFile(path.join(repo, ".wep/config.json"), "{ not json", "utf8");
+
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD")).rejects.toThrow(
+      /^Cannot capture a judge snapshot: \.wep\/config\.json could not be read/,
+    );
+  });
+
+  it("rejects a symlink inside a reviewed capsule before copying", async () => {
+    const { repo, task } = await createIgnoredHarnessFixture();
+    await symlink("plan.md", path.join(repo, task.taskDir, "notes.md"));
+
+    const capture = captureJudgeSnapshot(repo, task.taskId, "HEAD");
+    await expect(capture).rejects.toThrow(new RegExp(`${task.taskDir}/notes\\.md is a symlink`));
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD")).rejects.not.toThrow(/deterministic mismatch/);
+    expect(await readdirSafe(path.join(repo, ".wep/local/judge/snapshots"))).toEqual([]);
+  });
+
+  it("rejects a symlinked control file and a symlinked capsule directory", async () => {
+    const { repo, task } = await createIgnoredHarnessFixture();
+    await writeFile(path.join(tmp, "policy.md"), "- Linked policy.\n", "utf8");
+    await symlink(path.join(tmp, "policy.md"), path.join(repo, ".wep/review-policy.md"));
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD")).rejects.toThrow(
+      /\.wep\/review-policy\.md is a symlink/,
+    );
+
+    await rm(path.join(repo, ".wep/review-policy.md"));
+    const moved = path.join(tmp, "capsule");
+    await rename(path.join(repo, task.taskDir), moved);
+    await symlink(moved, path.join(repo, task.taskDir));
+    await expect(captureJudgeSnapshot(repo, task.taskId, "HEAD")).rejects.toThrow(
+      new RegExp(`${task.taskDir} is a symlink`),
+    );
+  });
+
+  it("detects a review policy deleted after capture, live and inside the snapshot", async () => {
+    const { repo, task } = await createIgnoredHarnessFixture();
+    await writeFile(path.join(repo, ".wep/review-policy.md"), "- Keep the CLI help in sync.\n", "utf8");
+    const snapshot = await captureJudgeSnapshot(repo, task.taskId, "HEAD");
+    expect((await checkJudgeSnapshotCurrentState(repo, snapshot.candidate)).status).toBe("CURRENT");
+
+    await rm(path.join(repo, ".wep/review-policy.md"));
+    expect((await checkJudgeSnapshotCurrentState(repo, snapshot.candidate)).status).not.toBe("CURRENT");
+
+    await rm(path.join(snapshot.worktreePath, ".wep/review-policy.md"));
+    await expect(loadJudgeSnapshot(repo, snapshot.candidate)).rejects.toThrow(/Snapshot integrity check failed/);
+  });
+});
+
+async function readdirSafe(dir: string): Promise<string[]> {
+  return (await readdir(dir).catch(() => [])).filter((name) => !name.startsWith("."));
+}
