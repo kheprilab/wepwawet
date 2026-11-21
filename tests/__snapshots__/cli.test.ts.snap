@@ -56,22 +56,27 @@ Commands:
 `;
 
 exports[`CLI help snapshots > doctor --help matches snapshot 1`] = `
-"Usage: wep doctor [options]
+"Usage: wep doctor [options] [command]
 
 Mechanically audit wep readiness and write generated reports to .wep/wiki/.
 
 Options:
-  --ci               fail with exit code 1 when the harness is incomplete or has
-                     actionable issues (default: false)
-  --fix              automatically recreate missing files and repair
-                     config/policy gaps (default: false)
-  --target <target>  target agent (choices: "codex", "claude", "copilot", "pi",
-                     "all")
-  --dry-run          show planned writes without writing files (default: false)
-  --force            update wep-owned files when they already exist (default:
-                     false)
-  --json             emit JSON output (for scripting) (default: false)
-  -h, --help         display help for command
+  --ci                    fail with exit code 1 when the harness is incomplete
+                          or has actionable issues (default: false)
+  --fix                   automatically recreate missing files and repair
+                          config/policy gaps (default: false)
+  --target <target>       target agent (choices: "codex", "claude", "copilot",
+                          "pi", "all")
+  --dry-run               show planned writes without writing files (default:
+                          false)
+  --force                 update wep-owned files when they already exist
+                          (default: false)
+  --json                  emit JSON output (for scripting) (default: false)
+  -h, --help              display help for command
+
+Commands:
+  merge [options] [file]  Review a pending suggested merge block by block, then
+                          accept or reject each block.
 
 Doctor checks:
   - The CLI performs deterministic setup checks; the installed Doctor skill performs semantic instruction review.
@@ -83,6 +88,7 @@ Doctor checks:
 
 Use --fix to recreate missing files and repair config/policy gaps automatically.
 Protected instructions remain read-only until the agent shows an exact diff and receives explicit human approval in the current conversation.
+Use \`wep doctor merge\` to review a pending suggestion block by block.
 
 It writes the report to .wep/wiki/agent-setup.md
 and prints a suggested agent prompt to finish the audit intelligently.

@@ -99,7 +99,7 @@ The command and the installed skill have separate responsibilities:
 
 `--fix` automatically recreates missing harness files and merges missing keys into `.wep/config.json` and `.wep/policy.json`. It does not create new protected-file suggestions merely because a protected file already exists.
 
-For a pending instruction merge, the Doctor agent compares the protected file with its `.wep.suggested.md` candidate and presents the exact minimal diff. The protected file remains read-only until the human explicitly approves that exact diff in the current conversation. After approval, the agent applies only the shown changes, displays the result, reruns Doctor, and removes the candidate only after verification. A changed proposal requires a new approval.
+For a pending instruction merge, the Doctor agent runs `wep doctor merge <file>`, which splits the `.wep.suggested.md` candidate into blocks (one per `##` section) and shows each pending block's diff against the protected file. The protected file remains read-only until the human explicitly approves each block in the current conversation. The agent then runs `wep doctor merge <file> --accept <block>` or `--reject <block>`. Accepting replaces the section with the same heading (case-insensitive) or appends it when absent; nothing else in the file changes. Rejections are recorded in `.wep/doctor/merge-decisions.json` with the block's content hash, so a declined block returns only when a newer template changes it. The candidate is removed once no block is pending, and init or upgrade do not write a new candidate when every block is already merged or declined. A changed proposal requires a new approval.
 
 ---
 

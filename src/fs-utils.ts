@@ -1,5 +1,7 @@
 import { access, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { parseBlocks, pendingBlocks } from "./merge-blocks.js";
+import { readMergeDecisions, rejectedFor } from "./merge-decisions.js";
 import type { WriteResult } from "./types.js";
 
 export async function pathExists(filePath: string): Promise<boolean> {
@@ -60,6 +62,16 @@ export async function writePlannedFile(
     const suggested = suggestedPathFor(relativePath);
     const suggestedAbsolute = path.join(cwd, suggested);
     const suggestedExists = await pathExists(suggestedAbsolute);
+    // A markdown suggestion whose every block is already in the file, or was rejected unchanged,
+    // would only be noise: there is nothing for `wep doctor merge` to propose.
+    // A suggestion without `##` sections has no blocks to compare, so it is always written.
+    if (!suggestedExists && relativePath.endsWith(".md") && parseBlocks(content).blocks.length > 0) {
+      const current = await readFile(targetPath, "utf8");
+      const rejected = rejectedFor(await readMergeDecisions(cwd), relativePath);
+      if (pendingBlocks(current, content, rejected).length === 0) {
+        return { kind: "preserve", path: relativePath, reason: "Existing file already has every suggested block." };
+      }
+    }
     if (!options.dryRun && !suggestedExists) {
       await mkdir(path.dirname(suggestedAbsolute), { recursive: true });
       await writeFile(suggestedAbsolute, content, "utf8");

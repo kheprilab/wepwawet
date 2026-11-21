@@ -4,6 +4,7 @@ import { agentFilePathList, agentWarningTexts, resolveAgents } from "./agents.js
 import { isLocalIgnoreContentSafe, localIgnorePath } from "./comprehension.js";
 import { readConfig, readConfigForDiagnosis, writeConfig } from "./config.js";
 import { detectTargets } from "./detect.js";
+import { pendingBlockCount } from "./doctor-merge.js";
 import { listDirs, pathExists, writePlannedFile } from "./fs-utils.js";
 import {
   expandModules,
@@ -450,7 +451,12 @@ async function getInstructionConflicts(cwd: string): Promise<string[]> {
   for (const file of protectedFiles) {
     const suggested = suggestedFor(file);
     if ((await pathExists(path.join(cwd, file))) && (await pathExists(path.join(cwd, suggested)))) {
-      conflicts.push(`${file} has a pending suggested merge: ${suggested}`);
+      const blocks = await pendingBlockCount(cwd, file).catch(() => undefined);
+      const detail =
+        blocks === undefined
+          ? ""
+          : ` (${blocks} pending block${blocks === 1 ? "" : "s"}; review with wep doctor merge ${file})`;
+      conflicts.push(`${file} has a pending suggested merge: ${suggested}${detail}`);
     }
   }
   return conflicts;

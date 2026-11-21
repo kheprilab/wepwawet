@@ -180,8 +180,10 @@ describe("wep init", () => {
     }
 
     const skill = await readFile(path.join(tmp, ".agents/skills/wep-doctor/SKILL.md"), "utf8");
-    expect(skill).toContain("Show the exact proposed diff");
-    expect(skill).toContain("apply only the shown changes");
+    expect(skill).toContain("Run `wep doctor merge <file>`");
+    expect(skill).toContain("wep doctor merge <file> --accept <block>");
+    expect(skill).toContain("--reject <block>");
+    expect(skill).toContain("apply only that change by hand");
     expect(skill).toContain("Never use `--force`");
 
     const semanticDoctorSkills = [
