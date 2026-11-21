@@ -168,7 +168,7 @@ const tasksTargetFiles: Record<Target, readonly string[]> = {
     ".pi/skills/wep-write-policy/SKILL.md",
   ],
   antigravity: [
-    "GEMINI.md",
+    "AGENTS.md",
     ".agents/skills/wep-init/SKILL.md",
     ".agents/skills/wep-doctor/SKILL.md",
     ".agents/skills/wep-task/SKILL.md",

@@ -12,6 +12,7 @@ import {
   protectedFiles,
   requiredFiles,
   targetFilesForModules,
+  targetReferenceFile,
   upgradesIgnorePath,
 } from "./harness-files.js";
 import { implLogPath } from "./impl.js";
@@ -316,7 +317,11 @@ async function getPolicyGaps(cwd: string): Promise<string[]> {
       gaps.push(".wep/policy.json — protectedFileMerge.requireDiffPreview must be true");
     }
 
+    // GEMINI.md is kept in default protectedFiles so user-authored files are never touched,
+    // but wep does not generate it; existing policies without it must not fail doctor.
+    const optionalProtectedFiles = new Set(["GEMINI.md"]);
     for (const file of expected.protectedFiles) {
+      if (optionalProtectedFiles.has(file)) continue;
       if (!arrayIncludes(policy.protectedFiles, file)) {
         gaps.push(`.wep/policy.json — protectedFiles missing ${file}`);
       }
@@ -392,13 +397,33 @@ async function getInstalledTargets(
       fileCounts.set(file, (fileCounts.get(file) ?? 0) + 1);
     }
   }
+  const sharedTargets = targets.filter((target) =>
+    targetFilesForModules(activeModules, target).every((file) => (fileCounts.get(file) ?? 0) > 1),
+  );
+  const sharedTargetRefs = new Map<Target, boolean>(
+    await Promise.all(
+      sharedTargets.map(
+        async (target) => [target, await pathExists(path.join(cwd, targetReferenceFile(target)))] as const,
+      ),
+    ),
+  );
+  const hasAnySharedRef = Array.from(sharedTargetRefs.values()).some(Boolean);
+
   const results = await Promise.all(
     targets.map(async (target) => {
-      const exclusiveFiles = targetFilesForModules(activeModules, target).filter(
-        (file) => (fileCounts.get(file) ?? 0) === 1,
-      );
-      const presence = await Promise.all(exclusiveFiles.map((file) => pathExists(path.join(cwd, file))));
-      return presence.some(Boolean) ? target : null;
+      const files = targetFilesForModules(activeModules, target);
+      const exclusiveFiles = files.filter((file) => (fileCounts.get(file) ?? 0) === 1);
+      if (exclusiveFiles.length > 0) {
+        const presence = await Promise.all(exclusiveFiles.map((file) => pathExists(path.join(cwd, file))));
+        return presence.some(Boolean) ? target : null;
+      }
+      const hasAnyFile = (await Promise.all(files.map((file) => pathExists(path.join(cwd, file))))).some(Boolean);
+      if (!hasAnyFile) return null;
+      if (hasAnySharedRef) {
+        return sharedTargetRefs.get(target) ? target : null;
+      }
+      // Legacy repositories created before target reference files existed default shared AGENTS.md to codex.
+      return target === "codex" ? target : null;
     }),
   );
   return results.filter((t): t is Target => t !== null);

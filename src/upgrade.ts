@@ -116,9 +116,11 @@ export async function runUpgrade(options: CommandOptions): Promise<UpgradeResult
   }
 
   if (hasModule(config, "tasks")) {
+    const seenRoots = new Set<string>();
     for (const target of selectedTargets) {
       const root = rootInstruction(target);
-      if (!root) continue;
+      if (!root || seenRoots.has(root.path)) continue;
+      seenRoots.add(root.path);
       const rootResult = await preserveRootInstruction(cwd, root.path, root.content, options, candidates);
       writes.push(...rootResult.writes);
     }
@@ -326,9 +328,10 @@ class UpgradeCandidateWriter {
 }
 
 function rootInstruction(target: Target): { path: string; content: string } | undefined {
-  if (target === "codex") return { path: "AGENTS.md", content: mainInstructionTemplate("codex") };
+  if (target === "codex" || target === "antigravity") {
+    return { path: "AGENTS.md", content: mainInstructionTemplate(target) };
+  }
   if (target === "claude") return { path: "CLAUDE.md", content: mainInstructionTemplate("claude") };
-  if (target === "antigravity") return { path: "GEMINI.md", content: mainInstructionTemplate("antigravity") };
   if (target === "copilot") {
     return { path: ".github/copilot-instructions.md", content: mainInstructionTemplate("copilot") };
   }
