@@ -30,6 +30,16 @@ describe("antigravity target (AC-1..AC-10)", () => {
       expect(hasAgentFormat("antigravity")).toBe(true);
     });
 
+    it("does not detect antigravity from GEMINI.md alone and behaves as no setup in non-interactive init", async () => {
+      await writeFile(path.join(tmp, "GEMINI.md"), "# Gemini CLI instructions\n", "utf8");
+
+      const detection = await detectTargets(tmp);
+      expect(detection.detected).toEqual([]);
+      expect(detection.evidence.antigravity).toEqual([]);
+
+      await expect(runInit({ cwd: tmp, nonInteractive: true })).rejects.toThrow(/No agent setup detected/);
+    });
+
     it("detects antigravity from its own signals without false-positives on codex files", async () => {
       await writeFile(path.join(tmp, "AGENTS.md"), "# Codex\n", "utf8");
       await mkdir(path.join(tmp, ".agents/skills"), { recursive: true });
@@ -41,7 +51,7 @@ describe("antigravity target (AC-1..AC-10)", () => {
       const both = await detectTargets(tmp);
       expect(both.detected).toContain("codex");
       expect(both.detected).toContain("antigravity");
-      expect(both.evidence.antigravity).toEqual(expect.arrayContaining(["GEMINI.md", ".agents/agents"]));
+      expect(both.evidence.antigravity).toEqual([".agents/agents"]);
     });
   });
 

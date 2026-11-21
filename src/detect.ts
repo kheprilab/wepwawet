@@ -13,7 +13,7 @@ const targetEvidence: Record<Target, string[]> = {
     ".github/skills",
   ],
   pi: [".pi"],
-  antigravity: ["GEMINI.md", ".agents/rules", ".agents/agents", ".agents/hooks.json", ".agents/plugins", ".agent"],
+  antigravity: [".agents/rules", ".agents/agents", ".agents/hooks.json", ".agents/plugins", ".agent"],
 };
 
 export async function detectTargets(cwd: string): Promise<DetectionResult> {
