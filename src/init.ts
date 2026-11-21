@@ -273,9 +273,8 @@ export async function runInit(options: CommandOptions): Promise<InitResult> {
 }
 
 function rootInstructionPathForTarget(target: Target): string {
-  if (target === "codex") return "AGENTS.md";
+  if (target === "codex" || target === "antigravity") return "AGENTS.md";
   if (target === "claude") return "CLAUDE.md";
-  if (target === "antigravity") return "GEMINI.md";
   if (target === "copilot") return ".github/copilot-instructions.md";
   return ".pi/README.md";
 }
@@ -452,10 +451,10 @@ async function installTarget(
   if (target === "antigravity") {
     const [main, ...skills] = await Promise.all([
       writeFile(
-        "GEMINI.md",
+        "AGENTS.md",
         templatePack?.rootInstructions ?? mainInstructionTemplate("antigravity"),
         true,
-        "Existing GEMINI.md preserved; wrote suggested Antigravity harness.",
+        "Existing AGENTS.md preserved; wrote suggested Antigravity harness.",
       ),
       ...Object.entries(antigravitySkills).map(([relativePath, content]) =>
         writeFile(relativePath, content, false, "Antigravity wep skill."),

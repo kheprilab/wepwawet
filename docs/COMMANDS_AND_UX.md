@@ -448,7 +448,7 @@ wep remove --all --force               # remove harness; keep task/local records
 wep remove --all --purge-tasks --purge-local --force  # also delete those records
 ```
 
-Protected root instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `copilot-instructions.md`, and `.pi/README.md`) are always skipped; remove them manually if needed. Target removal includes generated agent files and removes owned trace hooks (including `.agents/hooks.json` for Antigravity) while preserving `.agents/skills/` if another installed target still requires them. `--all` retains task capsules and local personal records by default; purge flags explicitly opt into deleting those records. It also removes the local review guard. Preview before applying.
+Protected root instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `copilot-instructions.md`, and `.pi/README.md`) are always skipped; remove them manually if needed. Target removal includes generated agent files and removes owned trace hooks (including `.agents/hooks.json` for Antigravity) while preserving `AGENTS.md` and `.agents/skills/` if another installed target still requires them. `--all` retains task capsules and local personal records by default; purge flags explicitly opt into deleting those records. It also removes the local review guard. Preview before applying.
 
 ---
 

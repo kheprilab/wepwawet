@@ -7,6 +7,7 @@ import { runComprehensionEnable } from "../src/comprehension.js";
 import { detectTargets } from "../src/detect.js";
 import { runDoctor } from "../src/doctor.js";
 import { pathExists } from "../src/fs-utils.js";
+import { protectedFiles } from "../src/harness-files.js";
 import { runHook } from "../src/hook/index.js";
 import { runTraceDisable, runTraceEnable, runTraceStatus } from "../src/hook/install.js";
 import { normalizePayload } from "../src/hook/payload.js";
@@ -17,6 +18,7 @@ import { runInit } from "../src/init.js";
 import { runJudgeEnable } from "../src/judge.js";
 import { runRemove } from "../src/remove.js";
 import { runTask } from "../src/task.js";
+import { mainInstructionTemplate } from "../src/templates/instructions.js";
 import { targets } from "../src/types.js";
 import { runUpgrade } from "../src/upgrade.js";
 import { tmp, useTempDir } from "./helpers/wep.js";
@@ -55,20 +57,22 @@ describe("antigravity target (AC-1..AC-10)", () => {
     });
   });
 
-  describe("AC-2: init, doctor, upgrade, compile, and protected GEMINI.md", () => {
-    it("installs GEMINI.md, skills, target reference, and judge agent; preserves existing GEMINI.md", async () => {
-      await writeFile(path.join(tmp, "GEMINI.md"), "# Custom project rules\n", "utf8");
+  describe("AC-2: init, doctor, upgrade, compile, and shared AGENTS.md", () => {
+    it("installs AGENTS.md (not GEMINI.md), skills, target reference, and judge agent; preserves existing AGENTS.md", async () => {
+      await writeFile(path.join(tmp, "AGENTS.md"), "# Custom project rules\n", "utf8");
 
       const init = await runInit({ cwd: tmp, target: "antigravity", nonInteractive: true });
       expect(init.selectedTargets).toEqual(["antigravity"]);
-      expect(await readFile(path.join(tmp, "GEMINI.md"), "utf8")).toBe("# Custom project rules\n");
-      expect(await pathExists(path.join(tmp, "GEMINI.wep.suggested.md"))).toBe(true);
+      expect(await readFile(path.join(tmp, "AGENTS.md"), "utf8")).toBe("# Custom project rules\n");
+      expect(await pathExists(path.join(tmp, "AGENTS.wep.suggested.md"))).toBe(true);
+      expect(await pathExists(path.join(tmp, "GEMINI.md"))).toBe(false);
       expect(await pathExists(path.join(tmp, ".agents/skills/wep-task/SKILL.md"))).toBe(true);
       expect(await pathExists(path.join(tmp, ".agents/agents/wep-judge.md"))).toBe(true);
 
       const targetRef = await readFile(path.join(tmp, ".wep/targets/antigravity.md"), "utf8");
       expect(targetRef).toContain("ask_question");
-      expect(targetRef).toContain("GEMINI.md");
+      expect(targetRef).toContain("AGENTS.md");
+      expect(targetRef).not.toContain("GEMINI.md");
       expect(targetRef).toContain("after-run check");
 
       const doctor = await runDoctor({ cwd: tmp });
@@ -83,34 +87,62 @@ describe("antigravity target (AC-1..AC-10)", () => {
       expect(upgrade.conflicts).toEqual([]);
     });
 
-    it("does not report a target as installed in doctor when its exclusive files are absent", async () => {
+    it("uses identical AGENTS.md for codex and antigravity without self-conflict when both are installed", async () => {
+      expect(mainInstructionTemplate("antigravity")).toBe(mainInstructionTemplate("codex"));
+
+      const init = await runInit({ cwd: tmp, target: "codex,antigravity", nonInteractive: true });
+      expect(init.conflicts).toEqual([]);
+      expect(await pathExists(path.join(tmp, "AGENTS.md"))).toBe(true);
+      expect(await pathExists(path.join(tmp, "AGENTS.wep.suggested.md"))).toBe(false);
+      expect(await pathExists(path.join(tmp, "GEMINI.md"))).toBe(false);
+
+      const doctor = await runDoctor({ cwd: tmp });
+      expect(doctor.installedTargets).toEqual(["codex", "antigravity"]);
+      expect(doctor.missing).toEqual([]);
+    });
+
+    it("keeps GEMINI.md protected without failing doctor on an existing policy that omits it", async () => {
+      expect(protectedFiles).toContain("GEMINI.md");
+
+      await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+      const policyPath = path.join(tmp, ".wep/policy.json");
+      const policy = JSON.parse(await readFile(policyPath, "utf8"));
+      policy.protectedFiles = policy.protectedFiles.filter((f: string) => f !== "GEMINI.md");
+      await writeFile(policyPath, `${JSON.stringify(policy, null, 2)}\n`, "utf8");
+
+      const doctor = await runDoctor({ cwd: tmp });
+      expect(doctor.missing.some((m) => m.includes("GEMINI.md"))).toBe(false);
+    });
+
+    it("does not report a target as installed in doctor when its files are absent", async () => {
       await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
       expect((await runDoctor({ cwd: tmp })).installedTargets).toEqual(["codex"]);
 
-      // Removing AGENTS.md leaves only shared .agents/skills, so neither codex nor antigravity is falsely reported.
       await rm(path.join(tmp, "AGENTS.md"));
+      await rm(path.join(tmp, ".agents"), { recursive: true, force: true });
       expect((await runDoctor({ cwd: tmp })).installedTargets).toEqual([]);
     });
   });
 
   describe("AC-3: safe remove when coexisting with codex", () => {
-    it("preserves shared .agents/skills when removing antigravity while codex remains installed", async () => {
+    it("preserves AGENTS.md and shared .agents/skills when removing antigravity while codex remains installed", async () => {
       await runInit({ cwd: tmp, target: "codex,antigravity", nonInteractive: true });
       expect(await pathExists(path.join(tmp, ".agents/skills/wep-task/SKILL.md"))).toBe(true);
       expect(await pathExists(path.join(tmp, ".agents/agents/wep-judge.md"))).toBe(true);
 
       const removed = await runRemove({ cwd: tmp, target: "antigravity", force: true });
-      expect(removed.protected).toContain("GEMINI.md");
-      expect(await pathExists(path.join(tmp, "GEMINI.md"))).toBe(true);
+      expect(await pathExists(path.join(tmp, "AGENTS.md"))).toBe(true);
       expect(await pathExists(path.join(tmp, ".agents/agents/wep-judge.md"))).toBe(false);
       // Shared skills stay because codex is still installed
       expect(await pathExists(path.join(tmp, ".agents/skills/wep-task/SKILL.md"))).toBe(true);
+      expect(removed.planned).not.toContain("AGENTS.md");
     });
 
-    it("removes shared .agents/skills when antigravity is the only installed target", async () => {
+    it("removes shared .agents/skills when antigravity is the only installed target and preserves protected AGENTS.md", async () => {
       await runInit({ cwd: tmp, target: "antigravity", nonInteractive: true });
       const removed = await runRemove({ cwd: tmp, target: "antigravity", force: true });
-      expect(removed.protected).toContain("GEMINI.md");
+      expect(removed.protected).toContain("AGENTS.md");
+      expect(await pathExists(path.join(tmp, "AGENTS.md"))).toBe(true);
       expect(await pathExists(path.join(tmp, ".agents/skills/wep-task/SKILL.md"))).toBe(false);
       expect(await pathExists(path.join(tmp, ".agents/agents/wep-judge.md"))).toBe(false);
     });

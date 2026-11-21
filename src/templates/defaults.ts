@@ -104,7 +104,6 @@ export function defaultPolicy(profile: Profile = "default"): WepPolicy {
         ...doctorProjectWikiPages,
         "AGENTS.wep.suggested.md",
         "CLAUDE.wep.suggested.md",
-        "GEMINI.wep.suggested.md",
         ".github/copilot-instructions.wep.suggested.md",
       ],
       task: [".wep/tasks/TASK-XXX/"],

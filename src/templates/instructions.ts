@@ -1,35 +1,28 @@
 import type { Target } from "../types.js";
 
 export const targetReferenceTemplates: Record<Target, string> = {
-  codex: "# Codex Target\n\nUse `AGENTS.md` and `.agents/skills/wep-*` as the primary wep harness.\n",
+  codex:
+    "# Codex Target\n\nUse `AGENTS.md` and `.agents/skills/wep-*` as the primary wep harness.\n\nFor `wep-comprehension`, spawn the project `wep-comprehension` agent (`.codex/agents/wep-comprehension.toml`), keep it in a separate thread, and direct the developer to continue the checkpoint in that thread.\n",
   claude:
     "# Claude Code Target\n\nUse `CLAUDE.md`, `.claude/skills/wep-*`, and `.claude/commands/` as the target adapter.\n\nFor the clarification step in `wep-task`, this host has a native question UI (`AskUserQuestion`); prefer it over enumerating options in prose. This is a rendering detail only — what gets written to the capsule is identical on every target.\n",
   copilot:
     "# GitHub Copilot Target\n\nUse `.github/copilot-instructions.md`, `.github/instructions/`, `.github/prompts/`, and `.github/skills/wep-*` as the target adapter. Skills are the reusable workflow surface; prompts are for one-shot invocation.\n",
   pi: "# Pi Code Target\n\nUse `.pi/prompts/` and `.pi/skills/wep-*` as the target adapter.\n",
   antigravity:
-    "# Antigravity Target\n\nUse `GEMINI.md`, `.agents/skills/wep-*`, and `.agents/agents/wep-*.md` as the target adapter.\n\nFor the clarification step in `wep-task`, this host has a native question UI (`ask_question`); prefer it over enumerating options in prose. This is a rendering detail only — what gets written to the capsule is identical on every target.\n\nAntigravity has no per-project uncommitted hooks file, so wep does not install a `judge run` write-guard hook in `.agents/hooks.json`; like Codex, Copilot, and Pi, this host relies on the after-run check of `wep judge run`.\n",
+    "# Antigravity Target\n\nUse `AGENTS.md`, `.agents/skills/wep-*`, and `.agents/agents/wep-*.md` as the target adapter.\n\nFor the clarification step in `wep-task`, this host has a native question UI (`ask_question`); prefer it over enumerating options in prose. This is a rendering detail only — what gets written to the capsule is identical on every target.\n\nFor a multi-turn `wep-comprehension` checkpoint, have the developer start a separate thread with `wep-comprehension` rather than relaying answers through a one-shot subagent.\n\nAntigravity has no per-project uncommitted hooks file, so wep does not install a `judge run` write-guard hook in `.agents/hooks.json`; like Codex, Copilot, and Pi, this host relies on the after-run check of `wep judge run`.\n",
 };
 
 export function mainInstructionTemplate(target: Target): string {
   const heading =
-    target === "claude"
-      ? "CLAUDE.md"
-      : target === "copilot"
-        ? "GitHub Copilot Instructions"
-        : target === "antigravity"
-          ? "GEMINI.md"
-          : "AGENTS.md";
+    target === "claude" ? "CLAUDE.md" : target === "copilot" ? "GitHub Copilot Instructions" : "AGENTS.md";
   const comprehensionInvocation =
     target === "claude"
       ? "For a multi-turn checkpoint, have the developer select this agent directly or start `claude --agent wep-comprehension`; Claude subagents cannot ask UI questions."
       : target === "copilot"
         ? "Use the agent picker or explicitly invoke the repository `wep Comprehension` custom agent for the interactive checkpoint."
-        : target === "codex"
-          ? "Spawn the project `wep-comprehension` agent, keep it in a separate thread, and direct the developer to continue the checkpoint in that thread."
-          : target === "antigravity"
-            ? "For a multi-turn checkpoint, have the developer start a separate thread with `wep-comprehension` rather than relaying answers through a one-shot subagent."
-            : "Pi has no native independent comprehension agent; do not run the checkpoint in the primary context.";
+        : target === "codex" || target === "antigravity"
+          ? "Run the project `wep-comprehension` agent in a separate thread and direct the developer to continue the checkpoint in that thread, rather than relaying personal answers through a one-shot subagent."
+          : "Pi has no native independent comprehension agent; do not run the checkpoint in the primary context.";
   return `# ${heading} - wep
 
 This repository uses wep as a local agentic workflow harness. Treat .wep/ as the workflow source of truth.

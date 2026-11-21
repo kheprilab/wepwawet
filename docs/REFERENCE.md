@@ -153,7 +153,7 @@ AGENTS.md or AGENTS.wep.suggested.md
 .codex/agents/wep-implementer.toml   # opt-in: impl enable
 ```
 
-Claude, Copilot, Pi Code, and Antigravity receive their own target adapters under `CLAUDE.md`, `.claude/`, `.github/`, `.pi/`, or `GEMINI.md` + `.agents/agents/`. Claude, Pi Code, and Antigravity get `SKILL.md` workflow packages (Antigravity shares `.agents/skills/` with Codex and wires trace hooks in `.agents/hooks.json`); Copilot gets repository instructions, skills, and reusable prompt files.
+Claude, Copilot, Pi Code, and Antigravity receive their own target adapters under `CLAUDE.md`, `.claude/`, `.github/`, `.pi/`, or `AGENTS.md` + `.agents/agents/`. Claude, Pi Code, and Antigravity get `SKILL.md` workflow packages (Antigravity shares `AGENTS.md` and `.agents/skills/` with Codex and wires trace hooks in `.agents/hooks.json`); Copilot gets repository instructions, skills, and reusable prompt files.
 
 ### Agent discovery
 
@@ -188,7 +188,7 @@ testing commands  -> .wep/wiki/testing.md
 
 ## Merge Safety
 
-wep preserves existing agent instructions. If `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or `.github/copilot-instructions.md` already exists, init writes a `.wep.suggested.md` file instead of replacing it.
+wep preserves existing agent instructions. If `AGENTS.md`, `CLAUDE.md`, or `.github/copilot-instructions.md` already exists, init writes a `.wep.suggested.md` file instead of replacing it. User-authored `GEMINI.md` files are also protected and never overwritten.
 
 `wep doctor` performs deterministic setup checks: required files, configuration, policy, merge conflicts, and wiki integrity. The installed `wep-doctor` skill is the semantic layer: an agent uses it to judge whether instructions are useful, duplicated, stale, or loaded at the wrong scope, and records that durable review in `.wep/wiki/instruction-audit.md`.
 
