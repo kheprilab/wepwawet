@@ -7,11 +7,19 @@ export const targetReferenceTemplates: Record<Target, string> = {
   copilot:
     "# GitHub Copilot Target\n\nUse `.github/copilot-instructions.md`, `.github/instructions/`, `.github/prompts/`, and `.github/skills/wep-*` as the target adapter. Skills are the reusable workflow surface; prompts are for one-shot invocation.\n",
   pi: "# Pi Code Target\n\nUse `.pi/prompts/` and `.pi/skills/wep-*` as the target adapter.\n",
+  antigravity:
+    "# Antigravity Target\n\nUse `GEMINI.md`, `.agents/skills/wep-*`, and `.agents/agents/wep-*.md` as the target adapter.\n\nFor the clarification step in `wep-task`, this host has a native question UI (`ask_question`); prefer it over enumerating options in prose. This is a rendering detail only — what gets written to the capsule is identical on every target.\n\nAntigravity has no per-project uncommitted hooks file, so wep does not install a `judge run` write-guard hook in `.agents/hooks.json`; like Codex, Copilot, and Pi, this host relies on the after-run check of `wep judge run`.\n",
 };
 
 export function mainInstructionTemplate(target: Target): string {
   const heading =
-    target === "claude" ? "CLAUDE.md" : target === "copilot" ? "GitHub Copilot Instructions" : "AGENTS.md";
+    target === "claude"
+      ? "CLAUDE.md"
+      : target === "copilot"
+        ? "GitHub Copilot Instructions"
+        : target === "antigravity"
+          ? "GEMINI.md"
+          : "AGENTS.md";
   const comprehensionInvocation =
     target === "claude"
       ? "For a multi-turn checkpoint, have the developer select this agent directly or start `claude --agent wep-comprehension`; Claude subagents cannot ask UI questions."
@@ -19,7 +27,9 @@ export function mainInstructionTemplate(target: Target): string {
         ? "Use the agent picker or explicitly invoke the repository `wep Comprehension` custom agent for the interactive checkpoint."
         : target === "codex"
           ? "Spawn the project `wep-comprehension` agent, keep it in a separate thread, and direct the developer to continue the checkpoint in that thread."
-          : "Pi has no native independent comprehension agent; do not run the checkpoint in the primary context.";
+          : target === "antigravity"
+            ? "For a multi-turn checkpoint, have the developer start a separate thread with `wep-comprehension` rather than relaying answers through a one-shot subagent."
+            : "Pi has no native independent comprehension agent; do not run the checkpoint in the primary context.";
   return `# ${heading} - wep
 
 This repository uses wep as a local agentic workflow harness. Treat .wep/ as the workflow source of truth.
@@ -324,6 +334,8 @@ function skillFiles(prefix: string): Record<string, string> {
 }
 
 export const codexSkills: Record<string, string> = skillFiles(".agents/skills");
+
+export const antigravitySkills: Record<string, string> = skillFiles(".agents/skills");
 
 export const claudeSkills: Record<string, string> = skillFiles(".claude/skills");
 

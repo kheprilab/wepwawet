@@ -167,6 +167,15 @@ const tasksTargetFiles: Record<Target, readonly string[]> = {
     ".pi/skills/wep-workflow/SKILL.md",
     ".pi/skills/wep-write-policy/SKILL.md",
   ],
+  antigravity: [
+    "GEMINI.md",
+    ".agents/skills/wep-init/SKILL.md",
+    ".agents/skills/wep-doctor/SKILL.md",
+    ".agents/skills/wep-task/SKILL.md",
+    ".agents/skills/wep-review/SKILL.md",
+    ".agents/skills/wep-workflow/SKILL.md",
+    ".agents/skills/wep-write-policy/SKILL.md",
+  ],
 };
 
 export function neutralFilesForModules(modules?: readonly ModuleName[]): string[] {
@@ -202,4 +211,10 @@ export function requiredFiles(modules: readonly ModuleName[] | undefined, target
 }
 
 /** Files that may be user-authored and must never be silently deleted. */
-export const protectedFiles = ["AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md", ".pi/README.md"];
+export const protectedFiles = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  ".github/copilot-instructions.md",
+  ".pi/README.md",
+];

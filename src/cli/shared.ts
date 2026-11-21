@@ -2,7 +2,7 @@ import { type Command, InvalidArgumentError, Option } from "commander";
 import { bold, cmd, dim, file, gray, green, mark, minus, plus, rule, warn, yellow } from "../format.js";
 import type { CommandOptions, DoctorResult, InitResult, Profile, Target, TargetOption, WriteResult } from "../types.js";
 
-const validTargetChoices = ["codex", "claude", "copilot", "pi", "all"] as const;
+const validTargetChoices = ["codex", "claude", "copilot", "pi", "antigravity", "all"] as const;
 
 function parseTargetArg(value: string): string {
   const parts = value
@@ -240,7 +240,9 @@ export function printInit(result: InitResult, options: CommandOptions): void {
   log(`    ${cmd("wep status")}         ${dim("— quick check")}`);
   log(`    ${cmd("wep doctor")}         ${dim("— full audit + readiness score")}`);
   log(`    ${cmd("wep comprehension enable")} ${dim("— enable understanding checkpoints")}`);
-  log(`    ${cmd("wep judge enable")}   ${dim("— add optional judge subagent (Claude / Copilot / Codex)")}`);
+  log(
+    `    ${cmd("wep judge enable")}   ${dim("— add optional judge subagent (Claude / Copilot / Codex / Antigravity)")}`,
+  );
   log(`    ${cmd("wep impl enable")}    ${dim("— add optional implementer subagent + attempt log")}`);
   log(`    ${cmd("wep --help")}         ${dim("— full reference")}`);
   ln();
@@ -400,6 +402,7 @@ export function targetLabel(target: Target): string {
     claude: "Claude Code",
     copilot: "GitHub Copilot",
     pi: "Pi Code",
+    antigravity: "Antigravity",
   };
   return labels[target];
 }
@@ -415,6 +418,9 @@ export function doctorPromptFor(target: Target): string {
   }
   if (target === "copilot") {
     return "Run `wep doctor` for deterministic checks, then use the wep Doctor prompt and skill to semantically audit this repo's Copilot instructions. Record instruction findings in .wep/wiki/instruction-audit.md. Audit setup only; do not implement product features. Show the exact minimal diff and ask for explicit approval before editing a protected instruction.";
+  }
+  if (target === "antigravity") {
+    return "Run `wep doctor` for deterministic checks, then use the `wep-doctor` skill to semantically audit this repo's Antigravity harness. Record instruction findings in .wep/wiki/instruction-audit.md. Audit setup only; do not implement product features. Show the exact minimal diff and ask for explicit approval before editing a protected instruction.";
   }
   return shared;
 }

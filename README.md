@@ -8,7 +8,7 @@
 [![CI](https://github.com/kheprilab/wepwawet/actions/workflows/ci.yml/badge.svg)](https://github.com/kheprilab/wepwawet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE)
 
-Codex · Claude Code · GitHub Copilot · Pi Code
+Codex · Claude Code · GitHub Copilot · Pi Code · Antigravity
 
 [Quickstart](#quickstart) · [How it works](#how-it-works) · [Documentation](#documentation)
 
@@ -70,7 +70,7 @@ wep init --target codex
 wep doctor
 ```
 
-Replace `codex` with `claude`, `copilot`, or `pi`, or use `all` for every adapter.
+Replace `codex` with `claude`, `copilot`, `pi`, or `antigravity`, or use `all` for every adapter.
 Init also accepts a comma-separated list such as `--target codex,claude`.
 Use `--dry-run` to preview an install. Existing root instructions are preserved and
 receive a suggested merge file; review that merge before expecting the agent to
@@ -98,7 +98,7 @@ or follow the [task walkthrough](TUTORIAL.md) through implementation and review.
    task checklist, and runs the agreed checks. For independent review, capture a snapshot,
    run approved validation, and verify the separate judge's structured record.
 
-The judge is enabled by normal full init for Codex, Claude Code, and Copilot, and
+The judge is enabled by normal full init for Codex, Claude Code, Copilot, and Antigravity, and
 the installed workflow invokes it automatically after the approved implementation.
 Comprehension checkpoints, the implementer agent, and local tracing are disabled until
 enabled. Pi supports workflow prompts and skills, but has no Wepwawet subagent adapter. See [configuration](docs/CONFIGURATION.md) for

@@ -386,10 +386,18 @@ async function getInstalledTargets(
   if (!hasModule(activeModules, "tasks")) {
     return config?.targets ?? [];
   }
+  const fileCounts = new Map<string, number>();
+  for (const target of targets) {
+    for (const file of targetFilesForModules(activeModules, target)) {
+      fileCounts.set(file, (fileCounts.get(file) ?? 0) + 1);
+    }
+  }
   const results = await Promise.all(
     targets.map(async (target) => {
-      const files = targetFilesForModules(activeModules, target);
-      const presence = await Promise.all(files.map((file) => pathExists(path.join(cwd, file))));
+      const exclusiveFiles = targetFilesForModules(activeModules, target).filter(
+        (file) => (fileCounts.get(file) ?? 0) === 1,
+      );
+      const presence = await Promise.all(exclusiveFiles.map((file) => pathExists(path.join(cwd, file))));
       return presence.some(Boolean) ? target : null;
     }),
   );
@@ -548,7 +556,7 @@ function buildSuggestions(
 
   if (installedTargets.length === 0) {
     suggestions.push({
-      text: "No target adapter found. Run `wep init --target <target>` to install one (codex, claude, copilot, or pi).",
+      text: "No target adapter found. Run `wep init --target <target>` to install one (codex, claude, copilot, pi, or antigravity).",
       severity: "error",
     });
   }

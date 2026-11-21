@@ -10,7 +10,7 @@ Arguments:
 
 Options:
   --target <target>  target agent (choices: "codex", "claude", "copilot", "pi",
-                     "all")
+                     "antigravity", "all")
   --dry-run          show planned writes without writing files (default: false)
   --force            update wep-owned files when they already exist (default:
                      false)
@@ -66,7 +66,7 @@ Options:
   --fix                   automatically recreate missing files and repair
                           config/policy gaps (default: false)
   --target <target>       target agent (choices: "codex", "claude", "copilot",
-                          "pi", "all")
+                          "pi", "antigravity", "all")
   --dry-run               show planned writes without writing files (default:
                           false)
   --force                 update wep-owned files when they already exist
@@ -146,7 +146,7 @@ Options:
   --template <name>       apply a bundled template pack
   --template-pack <path>  apply a target-relative template pack
   --target <target>       target agent (choices: "codex", "claude", "copilot",
-                          "pi", "all")
+                          "pi", "antigravity", "all")
   --dry-run               show planned writes without writing files (default:
                           false)
   --force                 update wep-owned files when they already exist
@@ -155,7 +155,7 @@ Options:
   -h, --help              display help for command
 
 What init does:
-  1. Detects existing agent setup (Codex, Claude, Copilot, Pi).
+  1. Detects existing agent setup (Codex, Claude, Copilot, Pi, Antigravity).
   2. Asks which agent to target if none is detected.
   3. Creates .wep/ — the neutral source of truth.
   4. Installs target-specific harness files (skills, prompts, instructions).
@@ -209,7 +209,7 @@ Remove wep harness files for a target.
 
 Options:
   --target <target>  target agent (choices: "codex", "claude", "copilot", "pi",
-                     "all")
+                     "antigravity", "all")
   --dry-run          show planned writes without writing files (default: false)
   --force            update wep-owned files when they already exist (default:
                      false)
@@ -431,7 +431,7 @@ Update wep-owned harness files to the current CLI version.
 
 Options:
   --target <target>  target agent (choices: "codex", "claude", "copilot", "pi",
-                     "all")
+                     "antigravity", "all")
   --dry-run          show planned writes without writing files (default: false)
   --force            update wep-owned files when they already exist (default:
                      false)

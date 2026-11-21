@@ -1,4 +1,4 @@
-export const targets = ["codex", "claude", "copilot", "pi"] as const;
+export const targets = ["codex", "claude", "copilot", "pi", "antigravity"] as const;
 
 export type Target = (typeof targets)[number];
 export type TargetOption = Target | "all" | string;

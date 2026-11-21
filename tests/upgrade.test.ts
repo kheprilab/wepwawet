@@ -499,7 +499,7 @@ describe("upgrade", () => {
     expect(result.completed).toBe(true);
     expect(result.installationComplete).toBe(false);
     expect(upgradedConfig?.installedVersion).toBe("0.2.0");
-    expect(upgradedConfig?.targets).toEqual(["codex", "claude", "copilot", "pi"]);
+    expect(upgradedConfig?.targets).toEqual(["codex", "claude", "copilot", "pi", "antigravity"]);
   });
 
   it("preserves invalid policy JSON and makes the upgrade incomplete", async () => {

@@ -77,7 +77,7 @@ export function defaultPolicy(profile: Profile = "default"): WepPolicy {
     version: 1,
     profile,
     mergeStrategy: "preserve-and-suggest",
-    protectedFiles: ["AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md", ".pi/README.md"],
+    protectedFiles: ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".pi/README.md"],
     protectedFileMerge: {
       agentMayEdit: "after-explicit-human-approval",
       approvalScope: "current-conversation",
@@ -104,6 +104,7 @@ export function defaultPolicy(profile: Profile = "default"): WepPolicy {
         ...doctorProjectWikiPages,
         "AGENTS.wep.suggested.md",
         "CLAUDE.wep.suggested.md",
+        "GEMINI.wep.suggested.md",
         ".github/copilot-instructions.wep.suggested.md",
       ],
       task: [".wep/tasks/TASK-XXX/"],

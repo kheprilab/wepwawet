@@ -23,6 +23,7 @@ export {
 export {
   targetReferenceTemplates,
   mainInstructionTemplate,
+  antigravitySkills,
   codexSkills,
   claudeSkills,
   claudeCommands,
@@ -31,8 +32,15 @@ export {
   piSkills,
   piFiles,
 } from "./templates/instructions.js";
-export { claudeJudgeFile, copilotJudgeFile, codexJudgeFile, judgeFilePaths } from "./templates/judge.js";
 export {
+  antigravityJudgeFile,
+  claudeJudgeFile,
+  copilotJudgeFile,
+  codexJudgeFile,
+  judgeFilePaths,
+} from "./templates/judge.js";
+export {
+  antigravityImplementerFile,
   claudeImplementerFile,
   copilotImplementerFile,
   codexImplementerFile,
@@ -42,6 +50,7 @@ export {
 export { judgeContractFiles } from "./templates/judge-contract.js";
 export { comprehensionFiles } from "./templates/comprehension.js";
 export {
+  antigravityComprehensionAgentFile,
   claudeComprehensionAgentFile,
   codexComprehensionAgentFile,
   copilotComprehensionAgentFile,

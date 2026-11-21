@@ -531,6 +531,7 @@ async function preflightFiles(
 function rootInstructionPath(target: Target): string {
   if (target === "codex") return "AGENTS.md";
   if (target === "claude") return "CLAUDE.md";
+  if (target === "antigravity") return "GEMINI.md";
   if (target === "copilot") return ".github/copilot-instructions.md";
   return ".pi/README.md";
 }

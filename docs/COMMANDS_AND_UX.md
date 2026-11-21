@@ -21,7 +21,7 @@ Flow:
 
 ```
 1. scan current directory
-2. detect existing agent setup (Codex, Claude, Copilot, Pi)
+2. detect existing agent setup (Codex, Claude, Copilot, Pi, Antigravity)
 3. select a single detected target, or prompt if none/several (headless use needs --target)
 4. create .wep/ — neutral source of truth
 5. install target-specific harness files
@@ -257,7 +257,7 @@ Concatenates task.md + context.md + plan.md + acceptance-criteria.md + review-ch
 .wep/tasks/TASK-001/exports/<target>.md
 ```
 
-`--target all` compiles one brief per configured target, or all four if no config exists. Without `--target`, compile uses `codex`; it does not read `defaults.target`. The real capsule directory includes its slug. Exports are derived files and are regenerated on every run; use `--dry-run` to preview.
+`--target all` compiles one brief per configured target, or all five if no config exists. Without `--target`, compile uses `codex`; it does not read `defaults.target`. The real capsule directory includes its slug. Exports are derived files and are regenerated on every run; use `--dry-run` to preview.
 
 Paste or reference this file in your agent session when you need a deterministic brief.
 
@@ -297,7 +297,7 @@ wep comprehension status
 
 Personal sessions are stored under `.wep/local/comprehension/` and ignored by Git. Read-only Git inspection is allowed; Git mutations and merge control are forbidden.
 
-Supported native agents: Codex, Claude Code, and GitHub Copilot. Wepwawet does not generate native independent-agent files for Pi.
+Supported native agents: Codex, Claude Code, GitHub Copilot, and Antigravity. Wepwawet does not generate native independent-agent files for Pi.
 
 ---
 
@@ -448,7 +448,7 @@ wep remove --all --force               # remove harness; keep task/local records
 wep remove --all --purge-tasks --purge-local --force  # also delete those records
 ```
 
-Protected root instruction files (`AGENTS.md`, `CLAUDE.md`, `copilot-instructions.md`, and `.pi/README.md`) are always skipped; remove them manually if needed. Target removal includes generated agent files and removes owned trace hooks. `--all` retains task capsules and local personal records by default; purge flags explicitly opt into deleting those records. It also removes the local review guard. Preview before applying.
+Protected root instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `copilot-instructions.md`, and `.pi/README.md`) are always skipped; remove them manually if needed. Target removal includes generated agent files and removes owned trace hooks (including `.agents/hooks.json` for Antigravity) while preserving `.agents/skills/` if another installed target still requires them. `--all` retains task capsules and local personal records by default; purge flags explicitly opt into deleting those records. It also removes the local review guard. Preview before applying.
 
 ---
 

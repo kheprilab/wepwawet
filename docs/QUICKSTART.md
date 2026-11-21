@@ -23,16 +23,17 @@ cd /path/to/your-project
 wep init
 ```
 
-wep detects existing agent setup (Codex, Claude Code, Copilot, Pi). One detected target is selected directly. With none or several, it asks which target to install in an interactive terminal; pass `--target` for headless use.
+wep detects existing agent setup (Codex, Claude Code, Copilot, Pi, Antigravity). One detected target is selected directly. With none or several, it asks which target to install in an interactive terminal; pass `--target` for headless use.
 
 To skip the prompt:
 
 ```bash
-wep init --target codex      # OpenAI Codex
-wep init --target claude     # Claude Code
-wep init --target copilot    # GitHub Copilot
-wep init --target pi         # Pi
-wep init --target all        # all at once
+wep init --target codex        # OpenAI Codex
+wep init --target claude       # Claude Code
+wep init --target copilot      # GitHub Copilot
+wep init --target pi           # Pi
+wep init --target antigravity  # Google Antigravity
+wep init --target all          # all at once
 ```
 
 Preview what would be created without writing anything:
@@ -83,7 +84,7 @@ Shows installed targets, task count, and current workflow default.
 
 ## Independent review
 
-Normal init enables the judge for Codex, Claude Code, and Copilot. After you approve the initial task brief, the installed workflow invokes it automatically after implementation. The brief covers the selected workflow, acceptance criteria, and exact validation commands. If your installation disabled it or omitted its module, enable it with:
+Normal init enables the judge for Codex, Claude Code, Copilot, and Antigravity. After you approve the initial task brief, the installed workflow invokes it automatically after implementation. The brief covers the selected workflow, acceptance criteria, and exact validation commands. If your installation disabled it or omitted its module, enable it with:
 
 ```bash
 wep judge enable

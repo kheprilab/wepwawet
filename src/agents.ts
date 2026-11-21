@@ -2,18 +2,26 @@ import path from "node:path";
 import { isDirectory } from "./fs-utils.js";
 import { frontmatterModel, tomlModel } from "./templates/agent-model.js";
 import {
+  antigravityComprehensionAgentFile,
   claudeComprehensionAgentFile,
   codexComprehensionAgentFile,
   comprehensionFilePaths,
   copilotComprehensionAgentFile,
 } from "./templates/comprehension-agent.js";
 import {
+  antigravityImplementerFile,
   claudeImplementerFile,
   codexImplementerFile,
   copilotImplementerFile,
   implementerFilePaths,
 } from "./templates/implementer.js";
-import { claudeJudgeFile, codexJudgeFile, copilotJudgeFile, judgeFilePaths } from "./templates/judge.js";
+import {
+  antigravityJudgeFile,
+  claudeJudgeFile,
+  codexJudgeFile,
+  copilotJudgeFile,
+  judgeFilePaths,
+} from "./templates/judge.js";
 import {
   type AgentEntryConfig,
   type AgentName,
@@ -36,7 +44,7 @@ import {
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
 
-export const agentTargets: AgentTarget[] = ["claude", "copilot", "codex"];
+export const agentTargets: AgentTarget[] = ["claude", "copilot", "codex", "antigravity"];
 
 export const agentFilePaths: Record<AgentName, Record<AgentTarget, string>> = {
   judge: judgeFilePaths,
@@ -47,13 +55,24 @@ export const agentFilePaths: Record<AgentName, Record<AgentTarget, string>> = {
 type FileFactory = (model?: string) => Record<string, string>;
 
 const agentFileFactories: Record<AgentName, Record<AgentTarget, FileFactory>> = {
-  judge: { claude: claudeJudgeFile, copilot: copilotJudgeFile, codex: codexJudgeFile },
+  judge: {
+    claude: claudeJudgeFile,
+    copilot: copilotJudgeFile,
+    codex: codexJudgeFile,
+    antigravity: antigravityJudgeFile,
+  },
   comprehension: {
     claude: claudeComprehensionAgentFile,
     copilot: copilotComprehensionAgentFile,
     codex: codexComprehensionAgentFile,
+    antigravity: antigravityComprehensionAgentFile,
   },
-  implementer: { claude: claudeImplementerFile, copilot: copilotImplementerFile, codex: codexImplementerFile },
+  implementer: {
+    claude: claudeImplementerFile,
+    copilot: copilotImplementerFile,
+    codex: codexImplementerFile,
+    antigravity: antigravityImplementerFile,
+  },
 };
 
 /** Triggers wep recognizes. Anything else is accepted and warned about, never rejected. */
@@ -103,6 +122,10 @@ export const modelPatterns: Record<AgentTarget, { pattern: RegExp; shape: string
     pattern: /^(gpt|claude|gemini|grok|o[0-9])[a-z0-9. -]*(\s\([a-z0-9-]+\))?$/i,
     shape: 'a vendor model name, optionally qualified: "Claude Opus 4.5", "GPT-5.2", "GPT-5 (copilot)"',
   },
+  antigravity: {
+    pattern: /^(gemini-[a-z0-9][a-z0-9.-]*|flash_lite|flash|pro|inherit|auto)$/i,
+    shape: "an alias (inherit, flash_lite, flash, pro, auto) or a Gemini model id like gemini-2.5-pro",
+  },
 };
 
 export function hasAgentFormat(target: Target): target is AgentTarget {
@@ -116,11 +139,12 @@ export function agentFiles(name: AgentName, target: AgentTarget, model?: string)
 export function templateAgentFilePath(name: string, target: AgentTarget): string {
   if (target === "claude") return `.claude/agents/${name}.md`;
   if (target === "copilot") return `.github/agents/${name}.agent.md`;
+  if (target === "antigravity") return `.agents/agents/${name}.md`;
   return `.codex/agents/${name}.toml`;
 }
 
 export function templateAgentPiWarning(name: string): string {
-  return `pi is installed but has no ${name} agent format, so no agent file is written for it. Claude Code, Codex, and Copilot are the supported agent hosts.`;
+  return `pi is installed but has no ${name} agent format, so no agent file is written for it. Claude Code, Codex, Copilot, and Antigravity are the supported agent hosts.`;
 }
 
 function parseTemplateAgentMarkdown(
@@ -194,6 +218,21 @@ name: ${yamlScalar(parsed.name)}
 description: ${yamlScalar(parsed.description)}
 tools: ["read", "search", "edit", "execute"]
 user-invocable: true
+${frontmatterModel(parsed.model)}---
+
+${parsed.body}
+`,
+    };
+  }
+
+  if (target === "antigravity") {
+    return {
+      [filePath]: `---
+name: ${yamlScalar(parsed.name)}
+description: ${yamlScalar(parsed.description)}
+subagent: true
+mainAgent: false
+tools: [view_file, find_file, create_file, edit_file, run_command]
 ${frontmatterModel(parsed.model)}---
 
 ${parsed.body}

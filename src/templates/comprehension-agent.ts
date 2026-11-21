@@ -44,6 +44,7 @@ export const comprehensionFilePaths: Record<AgentTarget, string> = {
   claude: ".claude/agents/wep-comprehension.md",
   copilot: ".github/agents/wep-comprehension.agent.md",
   codex: ".codex/agents/wep-comprehension.toml",
+  antigravity: ".agents/agents/wep-comprehension.md",
 };
 
 export function claudeComprehensionAgentFile(model?: string): Record<string, string> {
@@ -94,6 +95,27 @@ sandbox_mode = "read-only"
 developer_instructions = """
 ${comprehensionBody("codex", model).replace(/`/g, "'")}
 """
+`,
+  };
+}
+
+export function antigravityComprehensionAgentFile(model?: string): Record<string, string> {
+  return {
+    [comprehensionFilePaths.antigravity]: `---
+name: wep-comprehension
+description: Independent, interactive code-learning evaluator. Invoke only after the developer accepts the checkpoint and, when enabled, the judge approved the same change boundary.
+subagent: true
+mainAgent: false
+tools: [view_file, find_file, run_command]
+${frontmatterModel(model)}---
+
+# wep Comprehension Evaluator
+
+${comprehensionAgentInstructions}
+
+Antigravity subagents spawned via \`invoke_subagent\` report back to the parent agent rather than holding a direct multi-turn dialogue with the developer. Run this checkpoint in a separate thread with the developer directly; if you were spawned as a one-shot subagent, do not relay personal answers through the implementing agent — return DEFERRED with the separate-thread instruction.
+
+${modelSection("comprehension", "antigravity", model)}
 `,
   };
 }

@@ -281,6 +281,7 @@ function skillDestinationRoot(target: Target): string {
     claude: ".claude/skills",
     copilot: ".github/skills",
     pi: ".pi/skills",
+    antigravity: ".agents/skills",
   };
   return roots[target];
 }

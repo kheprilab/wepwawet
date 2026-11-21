@@ -22,10 +22,17 @@ export interface HookResult {
   reason?: string;
 }
 
-const noDecision = (recorded: boolean, reason?: string): HookResult => ({
+const noDecision = (recorded: boolean, reason?: string, body?: Record<string, unknown>): HookResult => ({
   recorded,
   ...(reason ? { reason } : {}),
+  ...(body ? { body } : {}),
 });
+
+function antigravityBody(event: NormalizedEvent["event"]): Record<string, unknown> | undefined {
+  if (event === "pre-tool") return { decision: "allow" };
+  if (event === "post-tool") return {};
+  return undefined;
+}
 
 /** Tool names that write. Bash is excluded on purpose: a shell command cannot be classified. */
 const mutatingTool = /write|edit|patch|create|delete|remove|move|rename|mkdir/i;
@@ -46,14 +53,16 @@ export async function runHook(
   cwd: string,
   options: { host?: string } = {},
 ): Promise<HookResult> {
+  let body: Record<string, unknown> | undefined;
   try {
     const event = normalizePayload(argvEvent, parsePayload(rawStdin));
-    if (!(await tracingEnabled(cwd))) return noDecision(false, "tracing is not enabled");
+    if (options.host === "antigravity") body = antigravityBody(event.event);
+    if (!(await tracingEnabled(cwd))) return noDecision(false, "tracing is not enabled", body);
     await record(cwd, event, options.host);
-    return noDecision(true);
+    return noDecision(true, undefined, body);
   } catch (error) {
     // Deliberately swallowed. A trace is diagnostics; the agent's session is the product.
-    return noDecision(false, error instanceof Error ? error.message : String(error));
+    return noDecision(false, error instanceof Error ? error.message : String(error), body);
   }
 }
 
@@ -100,7 +109,12 @@ async function observe(cwd: string, event: NormalizedEvent): Promise<TraceObserv
     if (capsuleId) observation.capsuleId = capsuleId;
   }
 
-  const command = typeof event.toolInput.command === "string" ? event.toolInput.command : undefined;
+  const command =
+    typeof event.toolInput.command === "string"
+      ? event.toolInput.command
+      : typeof event.toolInput.CommandLine === "string"
+        ? event.toolInput.CommandLine
+        : undefined;
   if (command && shellTool.test(event.toolName ?? "")) {
     // Executable name only, never arguments. Keeping the first two tokens leaked whatever
     // followed the program — `echo <secret>` wrote the secret straight into the trace, and
@@ -194,7 +208,7 @@ export function capsuleOf(relative: string): string | undefined {
 
 function isHarnessPath(relative: string): boolean {
   return (
-    ["AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"].includes(relative) ||
+    ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md"].includes(relative) ||
     [".claude/", ".codex/", ".agents/", ".pi/", ".github/instructions/", ".github/prompts/", ".github/skills/"].some(
       (prefix) => relative.startsWith(prefix),
     )
@@ -203,7 +217,7 @@ function isHarnessPath(relative: string): boolean {
 
 /** First path-shaped value in a tool input, across the key names the hosts use. */
 function firstPath(toolInput: Record<string, unknown>): string | undefined {
-  for (const key of ["file_path", "filePath", "path", "notebook_path", "target_file"]) {
+  for (const key of ["file_path", "filePath", "path", "Path", "notebook_path", "target_file"]) {
     const value = toolInput[key];
     if (typeof value === "string" && value.length > 0) return value;
   }

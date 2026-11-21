@@ -1,6 +1,7 @@
 import { readdir, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { agentFilePathList } from "./agents.js";
+import { readConfig } from "./config.js";
 import { pathExists } from "./fs-utils.js";
 import { protectedFiles, targetFilesForModules } from "./harness-files.js";
 import { removeGuard } from "./hook/guard.js";
@@ -28,11 +29,12 @@ export async function runRemove(
   // Trace wiring lives in shared host settings rather than in targetRequired. Remove its
   // owned entries first, while config and the pinned CLI still exist. For --all, inspect
   // every host rather than trusting a possibly stale targets list in config.json.
+  const config = await readConfig(cwd).catch(() => undefined);
   const updated = await unwireTraceTargets(cwd, removalTargets(options), { dryRun });
   const guard = await removeGuard(cwd, { dryRun }).catch(() => undefined);
   if (guard) updated.push(guard);
 
-  const candidates = collectCandidates(options);
+  const candidates = collectCandidates(options, config?.targets ?? []);
 
   // Check which candidates actually exist.
   const existence = await Promise.all(
@@ -185,7 +187,7 @@ async function simulatePrunedDirs(cwd: string, plannedFiles: string[]): Promise<
   return prunedDirs;
 }
 
-function collectCandidates(options: CommandOptions & { all?: boolean }): string[] {
+function collectCandidates(options: CommandOptions & { all?: boolean }, installedTargets: Target[] = []): string[] {
   const candidates: string[] = [];
 
   if (options.all) {
@@ -194,7 +196,7 @@ function collectCandidates(options: CommandOptions & { all?: boolean }): string[
       candidates.push(...agentCandidates(target));
     }
     // .wep/ is handled separately above via rm -r
-    return candidates;
+    return Array.from(new Set(candidates));
   }
 
   const target = options.target;
@@ -205,12 +207,16 @@ function collectCandidates(options: CommandOptions & { all?: boolean }): string[
       candidates.push(...targetFilesForModules(undefined, t));
       candidates.push(...agentCandidates(t));
     }
-    return candidates;
+    return Array.from(new Set(candidates));
   }
 
-  candidates.push(...targetFilesForModules(undefined, target as Target));
+  const remainingTargets = installedTargets.filter((t) => t !== target);
+  const retainedFiles = new Set(remainingTargets.flatMap((t) => targetFilesForModules(undefined, t)));
+  const targetFiles = targetFilesForModules(undefined, target as Target).filter((file) => !retainedFiles.has(file));
+
+  candidates.push(...targetFiles);
   candidates.push(...agentCandidates(target as Target));
-  return candidates;
+  return Array.from(new Set(candidates));
 }
 
 function removalTargets(options: CommandOptions & { all?: boolean }): Target[] {
