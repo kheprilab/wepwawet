@@ -146,7 +146,7 @@ export async function readTrace(cwd: string, sessionId: string): Promise<Trace> 
 
 export function parseTrace(sessionId: string, raw: string): Trace {
   const trace: Trace = { sessionId, observations: [], complete: true };
-  let lastRecordWasSessionEnd = false;
+  let lastEvent: NormalizedEventName | undefined;
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let value: unknown;
@@ -156,19 +156,19 @@ export function parseTrace(sessionId: string, raw: string): Trace {
       // A truncated final line is the normal shape of a session killed mid-write. Report
       // the trace as incomplete instead of dropping it or pretending it is whole.
       trace.complete = false;
-      lastRecordWasSessionEnd = false;
+      lastEvent = undefined;
       continue;
     }
     const record = value as TraceHeader | TraceObservation;
     if (isHeader(record)) {
       trace.header = record;
-      lastRecordWasSessionEnd = false;
+      lastEvent = undefined;
     } else if (isObservation(record)) {
       trace.observations.push(record);
-      lastRecordWasSessionEnd = record.event === "session-end";
+      lastEvent = record.event;
     } else {
       trace.complete = false;
-      lastRecordWasSessionEnd = false;
+      lastEvent = undefined;
     }
   }
   // A trace whose header never arrived is a trace that started before recording did, or one
@@ -177,8 +177,13 @@ export function parseTrace(sessionId: string, raw: string): Trace {
   if (!trace.header) trace.complete = false;
   // The *current lifecycle* must have ended. Looking for any historical SessionEnd let a
   // resumed session reuse the close from its previous run: header, end, resume header,
-  // live observations was incorrectly aggregated as complete.
-  if (!lastRecordWasSessionEnd) trace.complete = false;
+  // live observations was incorrectly aggregated as complete. Antigravity exposes `Stop`
+  // without `SessionEnd`, so `stop` closes a trace only for that host.
+  const closed =
+    trace.header?.host === "antigravity"
+      ? lastEvent === "stop" || lastEvent === "session-end"
+      : lastEvent === "session-end";
+  if (!closed) trace.complete = false;
   return trace;
 }
 

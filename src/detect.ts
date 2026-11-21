@@ -13,6 +13,7 @@ const targetEvidence: Record<Target, string[]> = {
     ".github/skills",
   ],
   pi: [".pi"],
+  antigravity: ["GEMINI.md", ".agents/rules", ".agents/agents", ".agents/hooks.json", ".agents/plugins", ".agent"],
 };
 
 export async function detectTargets(cwd: string): Promise<DetectionResult> {
@@ -21,6 +22,7 @@ export async function detectTargets(cwd: string): Promise<DetectionResult> {
     claude: [] as string[],
     copilot: [] as string[],
     pi: [] as string[],
+    antigravity: [] as string[],
   };
 
   for (const [target, candidates] of Object.entries(targetEvidence) as Array<[Target, string[]]>) {

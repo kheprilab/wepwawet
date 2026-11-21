@@ -32,7 +32,10 @@ const eventsByTarget: Record<Exclude<Target, "pi">, readonly string[]> = {
   claude: [...tracedEvents, failedToolEvent],
   codex: tracedEvents,
   copilot: [...tracedEvents, failedToolEvent],
+  antigravity: ["SessionStart", "PreToolUse", "PostToolUse", "Stop"],
 };
+
+const ANTIGRAVITY_TRACE_HOOK_NAME = "wep-trace";
 
 /**
  * The absolute entry point of the build doing the wiring.
@@ -106,6 +109,7 @@ const hostConfigPath: Record<Target, string> = {
   codex: ".codex/hooks.json",
   copilot: ".github/hooks/wep-trace.json",
   pi: ".pi/extensions/wep-trace.ts",
+  antigravity: ".agents/hooks.json",
 };
 
 export async function runTraceEnable(options: CommandOptions): Promise<TraceInstallResult> {
@@ -204,7 +208,12 @@ async function wireTarget(cwd: string, target: Target, options: CommandOptions):
     return relative;
   }
   const existing = await readJson(cwd, relative);
-  const next = target === "copilot" ? mergeCopilot(existing, target) : mergeHookTable(existing, target);
+  const next =
+    target === "copilot"
+      ? mergeCopilot(existing, target)
+      : target === "antigravity"
+        ? mergeAntigravity(existing)
+        : mergeHookTable(existing, target);
   if (!options.dryRun) {
     await writePlannedFile(cwd, relative, `${JSON.stringify(next, null, 2)}\n`, {
       force: true,
@@ -232,6 +241,25 @@ async function unwireTarget(
     return relative;
   }
   const existing = await readJson(cwd, relative);
+  if (target === "antigravity") {
+    const cleaned: Record<string, unknown> = {};
+    let changed = false;
+    for (const [name, block] of Object.entries(existing)) {
+      if (name === ANTIGRAVITY_TRACE_HOOK_NAME && isWepEntry(block)) {
+        changed = true;
+        continue;
+      }
+      cleaned[name] = block;
+    }
+    if (!changed) return undefined;
+    if (!options.dryRun) {
+      await writePlannedFile(cwd, relative, `${JSON.stringify(cleaned, null, 2)}\n`, {
+        force: true,
+        reason: "Removed wep session trace hooks.",
+      });
+    }
+    return relative;
+  }
   const hooks = existing.hooks;
   if (!hooks || typeof hooks !== "object") return undefined;
   // Remove only wep entries, then drop events left empty. Everything else is the
@@ -262,6 +290,14 @@ async function isWired(cwd: string, target: Target): Promise<boolean> {
   const relative = hostConfigPath[target];
   if (target === "pi") {
     return (await readFile(path.join(cwd, relative), "utf8").catch(() => "")) === piExtension();
+  }
+  if (target === "antigravity") {
+    const existing = await readJson(cwd, relative).catch(() => ({}) as Record<string, unknown>);
+    const block = existing[ANTIGRAVITY_TRACE_HOOK_NAME] as Record<string, unknown> | undefined;
+    if (!block || typeof block !== "object" || Array.isArray(block)) return false;
+    return eventsByTarget.antigravity.every((event) =>
+      hasExpectedCommand(block[event], hookCommand(event, "antigravity")),
+    );
   }
   const hooks = (await readJson(cwd, relative)).hooks as Record<string, unknown> | undefined;
   if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return false;
@@ -318,6 +354,32 @@ function mergeCopilot(existing: Record<string, unknown>, host: Target): Record<s
     ];
   }
   return { version: 1, ...existing, hooks };
+}
+
+/**
+ * Antigravity's `.agents/hooks.json` schema: top-level keys are named hooks, with flat handler
+ * arrays for `SessionStart`/`Stop` and `{ matcher, hooks }` groups for `PreToolUse`/`PostToolUse`.
+ */
+function mergeAntigravity(existing: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...existing,
+    [ANTIGRAVITY_TRACE_HOOK_NAME]: {
+      SessionStart: [{ type: "command", command: hookCommand("SessionStart", "antigravity"), timeout: timeoutSeconds }],
+      PreToolUse: [
+        {
+          matcher: "*",
+          hooks: [{ type: "command", command: hookCommand("PreToolUse", "antigravity"), timeout: timeoutSeconds }],
+        },
+      ],
+      PostToolUse: [
+        {
+          matcher: "*",
+          hooks: [{ type: "command", command: hookCommand("PostToolUse", "antigravity"), timeout: timeoutSeconds }],
+        },
+      ],
+      Stop: [{ type: "command", command: hookCommand("Stop", "antigravity"), timeout: timeoutSeconds }],
+    },
+  };
 }
 
 /** True when any `command` anywhere inside the entry is one of ours. */

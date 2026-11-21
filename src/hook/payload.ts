@@ -63,17 +63,25 @@ export function normalizePayload(argvEvent: string, payload: Record<string, unkn
   const declared = firstString(payload, ["hook_event_name", "hookEventName", "event", "eventName"]);
   // Copilot's failure event carries a top-level `error` string instead of a result object,
   // so failure is read from the event name and that field rather than from the result shape.
-  const failed = /failure/i.test(declared ?? argvEvent) || typeof payload.error === "string";
+  const failed =
+    /failure/i.test(declared ?? argvEvent) || (typeof payload.error === "string" && payload.error.length > 0);
+  // Antigravity nests tool details under `toolCall: { id, name, args }`.
+  const toolCall = firstObject(payload, ["toolCall"]);
   return {
     ...(failed ? { failed: true } : {}),
-    sessionId: firstString(payload, ["session_id", "sessionId"]) ?? syntheticSessionId(),
+    sessionId: firstString(payload, ["session_id", "sessionId", "conversationId"]) ?? syntheticSessionId(),
     event: normalizeEventName(declared ?? argvEvent),
     cwd: firstString(payload, ["cwd", "workingDirectory"]),
-    toolName: firstString(payload, ["tool_name", "toolName"]),
-    callId: firstString(payload, ["tool_use_id", "toolUseId", "toolCallId", "tool_call_id"]),
-    toolInput: firstObject(payload, ["tool_input", "toolArgs", "toolInput", "input"]),
+    toolName:
+      firstString(payload, ["tool_name", "toolName"]) ?? (toolCall ? firstString(toolCall, ["name"]) : undefined),
+    callId:
+      firstString(payload, ["tool_use_id", "toolUseId", "toolCallId", "tool_call_id"]) ??
+      (toolCall ? firstString(toolCall, ["id"]) : undefined),
+    toolInput:
+      firstObject(payload, ["tool_input", "toolArgs", "toolInput", "input"]) ??
+      (toolCall ? firstObject(toolCall, ["args"]) : undefined),
     toolResult: firstObject(payload, ["tool_result", "toolResult", "tool_response"]),
-    source: firstString(payload, ["source", "reason"]),
+    source: firstString(payload, ["source", "reason", "terminationReason"]),
   };
 }
 

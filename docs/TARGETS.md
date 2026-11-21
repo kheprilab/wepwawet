@@ -85,6 +85,26 @@ Wepwawet has no native subagent adapter for Pi. Judge, comprehension, and implem
 
 ---
 
+## Antigravity
+
+```
+GEMINI.md                                ← main instructions (protected)
+.agents/skills/wep-init/SKILL.md         ← shared with Codex when both are installed
+.agents/skills/wep-doctor/SKILL.md
+.agents/skills/wep-task/SKILL.md
+.agents/skills/wep-review/SKILL.md
+.agents/skills/wep-workflow/SKILL.md
+.agents/skills/wep-write-policy/SKILL.md
+.agents/agents/wep-judge.md              ← enabled by normal init; also managed by `wep judge enable`
+.agents/agents/wep-comprehension.md      ← opt-in: `wep comprehension enable`
+.agents/agents/wep-implementer.md        ← opt-in: `wep impl enable`
+.agents/hooks.json                       ← opt-in: `wep trace enable` (named `wep-trace` hook)
+```
+
+`GEMINI.md` is the primary instruction file Antigravity reads (kept separate from `AGENTS.md` so Antigravity and Codex can coexist cleanly). Skills live under `.agents/skills/` and are preserved by `wep remove --target` while another installed target still requires them. Subagents use Antigravity's `.agents/agents/*.md` format with YAML frontmatter. Because Antigravity has no per-project uncommitted hooks file, wep does not install a `judge run` write-guard hook in `.agents/hooks.json`; Antigravity relies on the after-run check of `wep judge run`, like Codex, Copilot, and Pi.
+
+---
+
 ## Neutral source of truth (all targets)
 
 ```
@@ -117,6 +137,7 @@ Wepwawet has no native subagent adapter for Pi. Judge, comprehension, and implem
     claude.md
     copilot.md
     pi.md
+    antigravity.md
 ```
 
 The selected modules determine which neutral files are written; a full init writes the layout above regardless of target. Target adapters are thin — they translate the harness into the format each agent expects.

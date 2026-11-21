@@ -237,7 +237,7 @@ describe("templates", () => {
 
     const appliedAll = await runTemplateApply({ cwd: tmp, templateRef: pack, local: true, nonInteractive: true });
     expect(appliedAll.completed).toBe(true);
-    expect(appliedAll.targets).toEqual(["codex", "claude", "copilot", "pi"]);
+    expect(appliedAll.targets).toEqual(["codex", "claude", "copilot", "pi", "antigravity"]);
     expect(await pathExists(path.join(tmp, ".agents/skills/dry-template/SKILL.md"))).toBe(true);
     expect(await pathExists(path.join(tmp, ".claude/skills/dry-template/SKILL.md"))).toBe(true);
     expect(await pathExists(path.join(tmp, ".github/skills/dry-template/SKILL.md"))).toBe(true);

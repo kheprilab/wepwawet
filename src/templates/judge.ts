@@ -142,6 +142,7 @@ export const judgeFilePaths: Record<AgentTarget, string> = {
   claude: ".claude/agents/wep-judge.md",
   copilot: ".github/agents/wep-judge.agent.md",
   codex: ".codex/agents/wep-judge.toml",
+  antigravity: ".agents/agents/wep-judge.md",
 };
 
 export function claudeJudgeFile(model?: string): Record<string, string> {
@@ -195,6 +196,26 @@ sandbox_mode = "read-only"
 developer_instructions = """
 ${judgeBody("codex", model).replace(/`/g, "'")}
 """
+`,
+  };
+}
+
+export function antigravityJudgeFile(model?: string): Record<string, string> {
+  return {
+    [judgeFilePaths.antigravity]: `---
+name: wep-judge
+description: >
+  Independent review agent. Use after implementation to verify that the code matches
+  the task capsule. Reads task.md, acceptance-criteria.md, and changed files, then
+  reports APPROVED / NEEDS CHANGES / BLOCKED without modifying any code.
+subagent: true
+mainAgent: false
+tools: [view_file, find_file, run_command]
+${frontmatterModel(model)}---
+
+# wep Judge
+
+${judgeBody("antigravity", model)}
 `,
   };
 }

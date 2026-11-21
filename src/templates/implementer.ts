@@ -37,7 +37,7 @@ The budget is enforced by the store, not by your restraint: \`wep impl log\` ref
 ## Boundaries
 
 - Never write any of the five capsule files. \`task.md\` feeds \`taskDigest\`, and writing it after a review boundary is established invalidates that boundary. Answers to clarifications belong to the lead agent, where the human is.
-- Never write protected instruction files (AGENTS.md, CLAUDE.md, .github/copilot-instructions.md, .pi/README.md). Editing those requires a human approving an exact diff in the conversation, and you do not have one.
+- Never write protected instruction files (AGENTS.md, CLAUDE.md, GEMINI.md, .github/copilot-instructions.md, .pi/README.md). Editing those requires a human approving an exact diff in the conversation, and you do not have one.
 - Never write \`.wep/review-policy.md\`. It is project-owned, written once by the developer, and not an implementer output.
 - Never read paths matched by the blocked-read patterns in \`.wep/policy.json\`.
 - On ambiguity, stop and return the question. Do not pick the interpretation that is easiest to build and continue.
@@ -56,6 +56,7 @@ export const implementerFilePaths: Record<AgentTarget, string> = {
   claude: ".claude/agents/wep-implementer.md",
   copilot: ".github/agents/wep-implementer.agent.md",
   codex: ".codex/agents/wep-implementer.toml",
+  antigravity: ".agents/agents/wep-implementer.md",
 };
 
 const description =
@@ -105,6 +106,24 @@ sandbox_mode = "workspace-write"
 developer_instructions = """
 ${implementerBody("codex", model).replace(/`/g, "'")}
 """
+`,
+  };
+}
+
+export function antigravityImplementerFile(model?: string): Record<string, string> {
+  return {
+    [implementerFilePaths.antigravity]: `---
+name: wep-implementer
+description: >
+  ${description}
+subagent: true
+mainAgent: false
+tools: [view_file, find_file, create_file, edit_file, run_command]
+${frontmatterModel(model)}---
+
+# wep Implementer
+
+${implementerBody("antigravity", model)}
 `,
   };
 }

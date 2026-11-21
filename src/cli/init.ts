@@ -20,7 +20,7 @@ export function registerInit(program: Command): void {
         [
           "",
           "What init does:",
-          "  1. Detects existing agent setup (Codex, Claude, Copilot, Pi).",
+          "  1. Detects existing agent setup (Codex, Claude, Copilot, Pi, Antigravity).",
           "  2. Asks which agent to target if none is detected.",
           "  3. Creates .wep/ — the neutral source of truth.",
           "  4. Installs target-specific harness files (skills, prompts, instructions).",

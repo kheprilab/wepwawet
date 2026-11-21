@@ -10,6 +10,7 @@ import { installGuard } from "./hook/guard.js";
 import { createManifestFromWrites, templateHash } from "./manifest.js";
 import { type TemplatePack, loadBundledTemplatePack, loadTemplatePack, mergeTemplateJson } from "./template-pack.js";
 import {
+  antigravitySkills,
   claudeCommands,
   claudeSkills,
   codexSkills,
@@ -274,6 +275,7 @@ export async function runInit(options: CommandOptions): Promise<InitResult> {
 function rootInstructionPathForTarget(target: Target): string {
   if (target === "codex") return "AGENTS.md";
   if (target === "claude") return "CLAUDE.md";
+  if (target === "antigravity") return "GEMINI.md";
   if (target === "copilot") return ".github/copilot-instructions.md";
   return ".pi/README.md";
 }
@@ -352,6 +354,7 @@ async function resolveTarget(
         { name: "Claude Code", value: "claude" },
         { name: "GitHub Copilot", value: "copilot" },
         { name: "Pi", value: "pi" },
+        { name: "Antigravity", value: "antigravity" },
         { name: "All", value: "all" },
       ],
     });
@@ -360,11 +363,13 @@ async function resolveTarget(
 
   if (detected.length > 1) {
     throw new Error(
-      `Multiple agent setups detected (${detected.join(", ")}) and no --target given. Pass --target <codex|claude|copilot|pi|all>.`,
+      `Multiple agent setups detected (${detected.join(", ")}) and no --target given. Pass --target <codex|claude|copilot|pi|antigravity|all>.`,
     );
   }
 
-  throw new Error("No agent setup detected and no --target given. Pass --target <codex|claude|copilot|pi|all>.");
+  throw new Error(
+    "No agent setup detected and no --target given. Pass --target <codex|claude|copilot|pi|antigravity|all>.",
+  );
 }
 
 async function installTarget(
@@ -441,6 +446,22 @@ async function installTarget(
       ),
     ]);
     writes.push(main, ...rest);
+    return writes;
+  }
+
+  if (target === "antigravity") {
+    const [main, ...skills] = await Promise.all([
+      writeFile(
+        "GEMINI.md",
+        templatePack?.rootInstructions ?? mainInstructionTemplate("antigravity"),
+        true,
+        "Existing GEMINI.md preserved; wrote suggested Antigravity harness.",
+      ),
+      ...Object.entries(antigravitySkills).map(([relativePath, content]) =>
+        writeFile(relativePath, content, false, "Antigravity wep skill."),
+      ),
+    ]);
+    writes.push(main, ...skills);
     return writes;
   }
 

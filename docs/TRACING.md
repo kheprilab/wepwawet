@@ -35,12 +35,13 @@ records before sharing them.
 | Codex | `.codex/hooks.json` |
 | GitHub Copilot | `.github/hooks/wep-trace.json` |
 | Pi | `.pi/extensions/wep-trace.ts` |
+| Antigravity | `.agents/hooks.json` (`wep-trace` entry) |
 
 JSON settings retain unrelated entries; the Pi extension occupies a wep-specific file.
 Hook commands pin the Node executable and CLI build used by `enable`. Rerun `enable` after
 moving the checkout or changing the CLI installation. `status` checks the expected pinned
 commands rather than treating any similarly named hook as current. It currently labels Codex,
-Copilot and Pi wiring as unverified: those adapters follow host documentation, while Claude
+Copilot, Pi, and Antigravity wiring as unverified: those adapters follow host documentation, while Claude
 has been exercised by an observed run. Wiring alone does not prove that a host is delivering
 all expected events.
 
@@ -84,7 +85,8 @@ same call id and command digest as a declared validation command.
 
 ## Aggregate denominators
 
-A complete trace has a valid session header, parseable records, and a final session-end event.
+A complete trace has a valid session header, parseable records, and a final session-end event
+(or a final `stop` event for Antigravity, which does not expose `SessionEnd`).
 A running, interrupted or truncated session is incomplete and excluded from aggregate metrics;
 it remains visible in JSON output. A resumed lifecycle needs its own end event.
 

@@ -17,6 +17,7 @@ import {
 } from "./manifest.js";
 import { mergeTemplateJson } from "./template-pack.js";
 import {
+  antigravitySkills,
   claudeCommands,
   claudeSkills,
   codexSkills,
@@ -226,6 +227,7 @@ function desiredManagedFiles(config: WepConfig, targets: Target[]): Record<strin
     for (const target of targets) {
       files[`.wep/targets/${target}.md`] = targetReferenceTemplates[target];
       if (target === "codex") Object.assign(files, codexSkills);
+      if (target === "antigravity") Object.assign(files, antigravitySkills);
       if (target === "claude") Object.assign(files, claudeCommands, claudeSkills);
       if (target === "copilot") Object.assign(files, copilotFiles, copilotSkills);
       if (target === "pi") {
@@ -326,6 +328,7 @@ class UpgradeCandidateWriter {
 function rootInstruction(target: Target): { path: string; content: string } | undefined {
   if (target === "codex") return { path: "AGENTS.md", content: mainInstructionTemplate("codex") };
   if (target === "claude") return { path: "CLAUDE.md", content: mainInstructionTemplate("claude") };
+  if (target === "antigravity") return { path: "GEMINI.md", content: mainInstructionTemplate("antigravity") };
   if (target === "copilot") {
     return { path: ".github/copilot-instructions.md", content: mainInstructionTemplate("copilot") };
   }
