@@ -210,7 +210,7 @@ description: >
   reports APPROVED / NEEDS CHANGES / BLOCKED without modifying any code.
 subagent: true
 mainAgent: false
-tools: [view_file, find_file, run_command]
+tools: [read_file, run_command]
 ${frontmatterModel(model)}---
 
 # wep Judge
