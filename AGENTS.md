@@ -21,7 +21,9 @@ Harness contracts are documented in `docs/HARNESS_SPEC.md`. Load local `.wep/wik
 - `src/version.ts` exports `CLI_VERSION`; `cli.ts`, `templates/defaults.ts`, and `doctor.ts` import it. release-please updates its version alongside package.json; do not bump either by hand.
 - `src/harness-files.ts` is the single source of which files each target requires. A new generated file that is not listed there is invisible to `doctor`, `upgrade`, and `remove`.
 - `policy.json` must not restrict what the programming agent can do (no `allowSourceCodeWrites`, no `network`, no `llmProvider` keys).
-- Never hand-edit installed harness copies under `.claude/skills/`, `.claude/commands/`, `.claude/agents/`, `.agents/`, `.github/skills/`, or `.pi/`. Repository-owned `.claude/settings.json` is maintained directly. Edit `src/templates/*` and re-run the CLI; `.wep/manifest.json` tracks a sha256 per file.
+- Never hand-edit installed harness copies under `.claude/skills/`, `.claude/commands/`, `.claude/agents/`, `.agents/`, `.github/skills/`, or `.pi/`. Repository-owned `.claude/settings.json` is maintained directly. Change them in `src/templates/*` and prove the change with tests; `.wep/manifest.json` tracks a sha256 per file.
+- This repository dogfoods a stable wep, never the branch under development: `pnpm dogfood:promote` builds it from `origin/main` into `.wep/local/bin/wep/` (the `post-merge` hook runs it). Never run `upgrade`, `init`, or `remove` against the local harness from this branch's `dist/` or `pnpm wep` (`--dry-run` is fine). Installed copies are refreshed from the stable build after the change is merged.
+- A criterion that needs the change running in the local harness cannot be proven on the branch. Say so in the Approval Brief and record it under `## Open Questions`; never replace a harness agent that fails to start with a hand-made one.
 
 ## Mandatory behavior
 
