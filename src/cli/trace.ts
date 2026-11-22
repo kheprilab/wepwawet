@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { bold, cmd, dim, file, gray, green, minus, plus, yellow } from "../format.js";
+import { bold, cmd, dim, file, gray, green, minus, plus, warn, yellow } from "../format.js";
 import { GUARD_MARKER, runGuard } from "../hook/guard.js";
 import { runHook } from "../hook/index.js";
 import { TRACE_MARKER, runTraceDisable, runTraceEnable, runTraceStatus } from "../hook/install.js";
@@ -50,21 +50,29 @@ export function registerTrace(program: Command): void {
       ].join("\n"),
     );
 
-  addCommon(trace.command("enable").description("Start recording sessions for installed targets."), false).action(
-    async (raw) => {
-      const options = normalizeOptions(raw);
-      const result = await runTraceEnable(options);
-      if (options.json) {
-        console.log(JSON.stringify(result, null, 2));
-        return;
-      }
-      log(`${bold("Trace:")} ${options.dryRun ? yellow("would enable (dry-run)") : green("enabled")}`);
-      for (const write of result.writes) log(`  ${plus()} ${file(write)}`);
+  addCommon(
+    trace
+      .command("enable")
+      .description("Start recording sessions for installed targets.")
+      .option("--allow-shared", "wire hooks into shared host settings files even when not ignored by Git", false),
+    false,
+  ).action(async (raw) => {
+    const options = normalizeOptions(raw);
+    const result = await runTraceEnable(options);
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    log(`${bold("Trace:")} ${options.dryRun ? yellow("would enable (dry-run)") : green("enabled")}`);
+    for (const write of result.writes) log(`  ${plus()} ${file(write)}`);
+    if (result.warnings.length) {
       ln();
-      log(`  ${dim("Pinned to this build; PATH is not consulted.")}`);
-      log(`  ${dim("Nothing is blocked or injected; this only records.")}`);
-    },
-  );
+      for (const message of result.warnings) log(`  ${warn()} ${yellow(message)}`);
+    }
+    ln();
+    log(`  ${dim("Pinned to this build; PATH is not consulted.")}`);
+    log(`  ${dim("Nothing is blocked or injected; this only records.")}`);
+  });
 
   addCommon(trace.command("disable").description("Stop recording and remove wep hook entries."), false).action(
     async (raw) => {

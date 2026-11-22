@@ -38,7 +38,7 @@ CLAUDE.md                                ← main instructions (protected)
 .claude/agents/wep-implementer.md     ← opt-in: `wep impl enable`
 ```
 
-`CLAUDE.md` is the primary instruction file Claude Code reads. Commands are slash-command shortcuts. Skills load on demand. Judge uses Claude Code's native subagent system (`.claude/agents/*.md` with YAML frontmatter). Enabling the judge also installs a guard hook in `.claude/settings.local.json` to refuse file-writing tools while a judge validation run holds its lock. Other hosts rely on the after-run change check.
+`CLAUDE.md` is the primary instruction file Claude Code reads. Commands are slash-command shortcuts. Skills load on demand. Judge uses Claude Code's native subagent system (`.claude/agents/*.md` with YAML frontmatter). Enabling the judge installs a guard hook in `.claude/settings.local.json` to refuse file-writing tools while a judge validation run holds its lock; `wep trace enable` also writes Claude trace hooks to `.claude/settings.local.json` (migrating any legacy trace entries out of `.claude/settings.json`). Other hosts rely on the after-run change check, and `wep trace enable` only writes their shared hook files when Git-ignored or with `--allow-shared`.
 
 ---
 
@@ -98,7 +98,7 @@ AGENTS.md                                ← main instructions (protected, share
 .agents/agents/wep-judge.md              ← enabled by normal init; also managed by `wep judge enable`
 .agents/agents/wep-comprehension.md      ← opt-in: `wep comprehension enable`
 .agents/agents/wep-implementer.md        ← opt-in: `wep impl enable`
-.agents/hooks.json                       ← opt-in: `wep trace enable` (named `wep-trace` hook)
+.agents/hooks.json                       ← opt-in: `wep trace enable` when Git-ignored or `--allow-shared` (`wep-trace` hook)
 ```
 
 `AGENTS.md` is the shared root instruction file read by both Antigravity and Codex (identical content for both targets, avoiding duplicate instructions when both are installed). Because Gemini CLI also uses `GEMINI.md`, `wep init` does not generate `GEMINI.md` and does not auto-detect Antigravity from `GEMINI.md` alone; auto-detection looks for Antigravity-specific signals (`.agents/agents`, `.agents/hooks.json`, `.agents/plugins`, `.agents/rules`, `.agent`). If a project only has `GEMINI.md`, pass `--target antigravity` (or choose it in the interactive prompt); any user-authored `GEMINI.md` remains protected and untouched. Skills live under `.agents/skills/` and both `AGENTS.md` and `.agents/skills/` are preserved by `wep remove --target` while another installed target still requires them. Subagents use Antigravity's `.agents/agents/*.md` format with YAML frontmatter. Because Antigravity has no per-project uncommitted hooks file, wep does not install a `judge run` write-guard hook in `.agents/hooks.json`; Antigravity relies on the after-run check of `wep judge run`, like Codex, Copilot, and Pi.

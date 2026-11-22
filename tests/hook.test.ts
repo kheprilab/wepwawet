@@ -854,7 +854,7 @@ describe("host-specific outcome delivery", () => {
   it("settles a failed Claude edit through PostToolUseFailure with the same call id", async () => {
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
     await enableTrace(tmp);
-    const settings = JSON.parse(await readFile(path.join(tmp, ".claude/settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(path.join(tmp, ".claude/settings.local.json"), "utf8"));
     expect(settings.hooks.PostToolUseFailure).toBeDefined();
     await runHook("SessionStart", payload(), tmp);
     const call = { tool_name: "Edit", tool_use_id: "claude-edit-1", tool_input: { file_path: "src/a.ts" } };
@@ -890,12 +890,12 @@ describe("host-specific outcome delivery", () => {
   });
 
   it.each([
-    ["claude", ".claude/settings.json"],
+    ["claude", ".claude/settings.local.json"],
     ["copilot", ".github/hooks/wep-trace.json"],
   ] as const)("wires %s PostToolUseFailure so failed calls settle", async (target, relative) => {
     await runInit({ cwd: tmp, target, nonInteractive: true });
 
-    await enableTrace(tmp);
+    await enableTrace(tmp, { allowShared: true });
 
     const config = JSON.parse(await readFile(path.join(tmp, relative), "utf8"));
     expect(Object.keys(config.hooks)).toContain("PostToolUseFailure");
@@ -906,7 +906,7 @@ describe("host-specific outcome delivery", () => {
     // never contribute to the mutation denominator at all.
     await runInit({ cwd: tmp, target: "pi", nonInteractive: true });
 
-    await enableTrace(tmp);
+    await enableTrace(tmp, { allowShared: true });
 
     const extension = await readFile(path.join(tmp, ".pi/extensions/wep-trace.ts"), "utf8");
     expect(extension).toContain('pi.on("tool_result"');
@@ -1289,14 +1289,18 @@ describe("trace installation", () => {
     const { runTraceStatus } = await import("../src/hook/install.js");
     expect((await runTraceStatus({ cwd: tmp, nonInteractive: true })).enabled).toBe(false);
     expect(await exists(path.join(tmp, ".claude/settings.json"))).toBe(false);
+    const localSettings = await readFile(path.join(tmp, ".claude/settings.local.json"), "utf8").catch(() => "");
+    expect(localSettings).not.toContain(traceMarker);
   });
 
-  it("preserves unrelated settings and existing hooks", async () => {
+  it("writes Claude trace hooks to .claude/settings.local.json and preserves unrelated settings and hooks", async () => {
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
-    const settings = path.join(tmp, ".claude/settings.json");
-    await mkdir(path.dirname(settings), { recursive: true });
+    const sharedSettings = path.join(tmp, ".claude/settings.json");
+    const localSettings = path.join(tmp, ".claude/settings.local.json");
+    await mkdir(path.dirname(sharedSettings), { recursive: true });
+    await writeFile(sharedSettings, JSON.stringify({ model: "shared-model" }), "utf8");
     await writeFile(
-      settings,
+      localSettings,
       JSON.stringify({
         model: "some-model",
         permissions: { allow: ["Bash(ls:*)"] },
@@ -1307,26 +1311,27 @@ describe("trace installation", () => {
 
     await enableTrace(tmp);
 
-    const next = JSON.parse(await readFile(settings, "utf8"));
+    const next = JSON.parse(await readFile(localSettings, "utf8"));
     expect(next.model).toBe("some-model");
     expect(next.permissions.allow).toEqual(["Bash(ls:*)"]);
     expect(JSON.stringify(next.hooks.PreToolUse)).toContain("my-own-linter");
     expect(JSON.stringify(next.hooks.PreToolUse)).toContain("hook PreToolUse");
+    expect(await readFile(sharedSettings, "utf8")).toBe(JSON.stringify({ model: "shared-model" }));
   });
 
   it("is idempotent", async () => {
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
 
     await enableTrace(tmp);
-    const first = await readFile(path.join(tmp, ".claude/settings.json"), "utf8");
+    const first = await readFile(path.join(tmp, ".claude/settings.local.json"), "utf8");
     await enableTrace(tmp);
 
-    expect(await readFile(path.join(tmp, ".claude/settings.json"), "utf8")).toBe(first);
+    expect(await readFile(path.join(tmp, ".claude/settings.local.json"), "utf8")).toBe(first);
   });
 
   it("removes only what wep added", async () => {
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
-    const settings = path.join(tmp, ".claude/settings.json");
+    const settings = path.join(tmp, ".claude/settings.local.json");
     await mkdir(path.dirname(settings), { recursive: true });
     await writeFile(
       settings,
@@ -1343,6 +1348,97 @@ describe("trace installation", () => {
     expect(raw).not.toContain("wep hook");
   });
 
+  it("migrates legacy wep-trace entries out of .claude/settings.json on enable while preserving foreign hooks", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    const sharedSettings = path.join(tmp, ".claude/settings.json");
+    await mkdir(path.dirname(sharedSettings), { recursive: true });
+    const legacyContent = JSON.stringify(
+      {
+        model: "shared-model",
+        hooks: {
+          PreToolUse: [
+            { hooks: [{ type: "command", command: "team-linter" }] },
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: `"/usr/bin/node" "/old/wep.js" hook PreToolUse ${traceMarker} --wep-host claude`,
+                },
+              ],
+            },
+            { hooks: [{ type: "command", command: "wep hook PreToolUse" }] },
+          ],
+          Stop: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: `"/usr/bin/node" "/old/wep.js" hook Stop ${traceMarker} --wep-host claude`,
+                },
+              ],
+            },
+          ],
+        },
+      },
+      null,
+      2,
+    );
+    await writeFile(sharedSettings, legacyContent, "utf8");
+
+    const { runTraceEnable } = await import("../src/hook/install.js");
+    const dry = await runTraceEnable({ cwd: tmp, dryRun: true, nonInteractive: true });
+    expect(dry.writes).toEqual(expect.arrayContaining([".claude/settings.local.json", ".claude/settings.json"]));
+    expect(await readFile(sharedSettings, "utf8")).toBe(legacyContent);
+
+    const result = await runTraceEnable({ cwd: tmp, nonInteractive: true });
+    expect(result.writes).toEqual(expect.arrayContaining([".claude/settings.local.json", ".claude/settings.json"]));
+
+    const sharedAfter = JSON.parse(await readFile(sharedSettings, "utf8"));
+    expect(sharedAfter.model).toBe("shared-model");
+    expect(JSON.stringify(sharedAfter)).toContain("team-linter");
+    expect(JSON.stringify(sharedAfter)).not.toContain(traceMarker);
+    expect(JSON.stringify(sharedAfter)).not.toContain("wep hook");
+    expect(sharedAfter.hooks.Stop).toBeUndefined();
+
+    const localAfter = JSON.parse(await readFile(path.join(tmp, ".claude/settings.local.json"), "utf8"));
+    expect(JSON.stringify(localAfter.hooks.PreToolUse)).toContain(traceMarker);
+  });
+
+  it("cleans legacy wep-trace entries from .claude/settings.json on disable while preserving foreign hooks", async () => {
+    await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
+    const sharedSettings = path.join(tmp, ".claude/settings.json");
+    await mkdir(path.dirname(sharedSettings), { recursive: true });
+    await writeFile(
+      sharedSettings,
+      JSON.stringify({
+        model: "shared-model",
+        hooks: {
+          PreToolUse: [
+            { hooks: [{ type: "command", command: "team-linter" }] },
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: `"/usr/bin/node" "/old/wep.js" hook PreToolUse ${traceMarker} --wep-host claude`,
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    const { runTraceDisable } = await import("../src/hook/install.js");
+    const result = await runTraceDisable({ cwd: tmp, nonInteractive: true });
+
+    expect(result.writes).toContain(".claude/settings.json");
+    const sharedAfter = JSON.parse(await readFile(sharedSettings, "utf8"));
+    expect(sharedAfter.model).toBe("shared-model");
+    expect(JSON.stringify(sharedAfter)).toContain("team-linter");
+    expect(JSON.stringify(sharedAfter)).not.toContain(traceMarker);
+  });
+
   it("stops recording once disabled", async () => {
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
     await enableTrace(tmp);
@@ -1356,7 +1452,7 @@ describe("trace installation", () => {
 
   it("reports non-dogfooded hosts as unverified rather than as supported", async () => {
     await runInit({ cwd: tmp, target: "copilot", nonInteractive: true });
-    await enableTrace(tmp);
+    await enableTrace(tmp, { allowShared: true });
 
     const { runTraceStatus } = await import("../src/hook/install.js");
     const status = await runTraceStatus({ cwd: tmp, nonInteractive: true });
@@ -1366,12 +1462,66 @@ describe("trace installation", () => {
   });
 
   it.each([
-    ["claude", ".claude/settings.json", "SessionStart"],
-    ["claude", ".claude/settings.json", "PreToolUse"],
-    ["claude", ".claude/settings.json", "PostToolUse"],
-    ["claude", ".claude/settings.json", "PostToolUseFailure"],
-    ["claude", ".claude/settings.json", "Stop"],
-    ["claude", ".claude/settings.json", "SessionEnd"],
+    ["codex", ".codex/hooks.json"],
+    ["copilot", ".github/hooks/wep-trace.json"],
+    ["antigravity", ".agents/hooks.json"],
+    ["pi", ".pi/extensions/wep-trace.ts"],
+  ] as const)(
+    "skips %s with a warning when outside Git or not ignored, and wires when git-ignored or --allow-shared",
+    async (target, relative) => {
+      await runInit({ cwd: tmp, target, nonInteractive: true });
+      const { runTraceEnable } = await import("../src/hook/install.js");
+
+      // Outside a Git repository: skipped with warning.
+      const outsideGit = await runTraceEnable({ cwd: tmp, nonInteractive: true });
+      expect(outsideGit.wiredTargets).not.toContain(target);
+      expect(outsideGit.skippedTargets).toContain(target);
+      expect(outsideGit.warnings.join("\n")).toContain(relative);
+      expect(outsideGit.warnings.join("\n")).toContain("--allow-shared");
+      expect(await exists(path.join(tmp, relative))).toBe(false);
+
+      // Inside a Git repository, unignored: still skipped.
+      await initGit(tmp);
+      const unignored = await runTraceEnable({ cwd: tmp, nonInteractive: true });
+      expect(unignored.wiredTargets).not.toContain(target);
+      expect(unignored.skippedTargets).toContain(target);
+      expect(await exists(path.join(tmp, relative))).toBe(false);
+
+      // Ignored via .gitignore: wired automatically.
+      await writeFile(path.join(tmp, ".gitignore"), `${relative}\n`, "utf8");
+      const ignored = await runTraceEnable({ cwd: tmp, nonInteractive: true });
+      expect(ignored.wiredTargets).toContain(target);
+      expect(ignored.skippedTargets).not.toContain(target);
+      expect(ignored.warnings).toHaveLength(0);
+      expect(await exists(path.join(tmp, relative))).toBe(true);
+    },
+  );
+
+  it("skips a tracked shared hook file even if .gitignore later matches it, unless --allow-shared is passed", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await mkdir(path.join(tmp, ".codex"), { recursive: true });
+    await writeFile(path.join(tmp, ".codex/hooks.json"), "{}\n", "utf8");
+    await initGit(tmp);
+    await writeFile(path.join(tmp, ".gitignore"), ".codex/hooks.json\n", "utf8");
+
+    const { runTraceEnable } = await import("../src/hook/install.js");
+    const skipped = await runTraceEnable({ cwd: tmp, nonInteractive: true });
+    expect(skipped.skippedTargets).toContain("codex");
+    expect(skipped.wiredTargets).not.toContain("codex");
+
+    const optedIn = await runTraceEnable({ cwd: tmp, allowShared: true, nonInteractive: true });
+    expect(optedIn.wiredTargets).toContain("codex");
+    expect(optedIn.skippedTargets).not.toContain("codex");
+    expect(await readFile(path.join(tmp, ".codex/hooks.json"), "utf8")).toContain(traceMarker);
+  });
+
+  it.each([
+    ["claude", ".claude/settings.local.json", "SessionStart"],
+    ["claude", ".claude/settings.local.json", "PreToolUse"],
+    ["claude", ".claude/settings.local.json", "PostToolUse"],
+    ["claude", ".claude/settings.local.json", "PostToolUseFailure"],
+    ["claude", ".claude/settings.local.json", "Stop"],
+    ["claude", ".claude/settings.local.json", "SessionEnd"],
     ["codex", ".codex/hooks.json", "SessionStart"],
     ["codex", ".codex/hooks.json", "PreToolUse"],
     ["codex", ".codex/hooks.json", "PostToolUse"],
@@ -1385,7 +1535,7 @@ describe("trace installation", () => {
     ["copilot", ".github/hooks/wep-trace.json", "SessionEnd"],
   ] as const)("reports %s as unwired when %s lacks %s", async (target, relative, missingEvent) => {
     await runInit({ cwd: tmp, target, nonInteractive: true });
-    await enableTrace(tmp);
+    await enableTrace(tmp, { allowShared: true });
     const configPath = path.join(tmp, relative);
     const config = JSON.parse(await readFile(configPath, "utf8"));
     delete config.hooks[missingEvent];
@@ -1405,7 +1555,7 @@ describe("trace installation", () => {
   ])("does not accept a hook command with %s", async (_label, current, replacement) => {
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
     await enableTrace(tmp);
-    const settingsPath = path.join(tmp, ".claude/settings.json");
+    const settingsPath = path.join(tmp, ".claude/settings.local.json");
     const settings = JSON.parse(await readFile(settingsPath, "utf8"));
     settings.hooks.PreToolUse.at(-1).hooks[0].command = settings.hooks.PreToolUse.at(-1).hooks[0].command.replace(
       current,
@@ -1425,7 +1575,7 @@ describe("trace installation", () => {
 
     await enableTrace(tmp);
 
-    const settings = JSON.parse(await readFile(path.join(tmp, ".claude/settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(path.join(tmp, ".claude/settings.local.json"), "utf8"));
     const command: string = settings.hooks.PreToolUse.at(-1).hooks[0].command;
     expect(command).toContain("hook PreToolUse");
     expect(command.startsWith("wep ")).toBe(false);
@@ -1441,7 +1591,7 @@ describe("trace installation", () => {
     // the convention a peer tool is most likely to pick too. Recognizing our entries by that
     // shape made `trace enable` delete other people's hooks — silently, and destructively.
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
-    const settings = path.join(tmp, ".claude/settings.json");
+    const settings = path.join(tmp, ".claude/settings.local.json");
     await mkdir(path.dirname(settings), { recursive: true });
     await writeFile(
       settings,
@@ -1472,7 +1622,7 @@ describe("trace installation", () => {
     // Anything wired by an earlier build carries the unpinned form. It has to be adopted on
     // the next enable, or enabling would stack a second entry beside it.
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
-    const settings = path.join(tmp, ".claude/settings.json");
+    const settings = path.join(tmp, ".claude/settings.local.json");
     await mkdir(path.dirname(settings), { recursive: true });
     await writeFile(
       settings,
@@ -1503,7 +1653,7 @@ describe("trace installation", () => {
 
     await enableTrace(tmp);
 
-    const settings = JSON.parse(await readFile(path.join(tmp, ".claude/settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(path.join(tmp, ".claude/settings.local.json"), "utf8"));
     expect(settings.hooks.PreToolUse.at(-1).hooks[0].command).toContain("--wep-host claude");
   });
 
@@ -1512,7 +1662,7 @@ describe("trace installation", () => {
     ["whitespace only", "   \n"],
   ])("refuses to merge into %s rather than overwriting it", async (_label, contents) => {
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
-    const settings = path.join(tmp, ".claude/settings.json");
+    const settings = path.join(tmp, ".claude/settings.local.json");
     await mkdir(path.dirname(settings), { recursive: true });
     await writeFile(settings, contents, "utf8");
 
@@ -1524,7 +1674,7 @@ describe("trace installation", () => {
     // The merged result is written back with force, so treating a corrupt file as empty
     // destroyed everything in it.
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
-    const settings = path.join(tmp, ".claude/settings.json");
+    const settings = path.join(tmp, ".claude/settings.local.json");
     await mkdir(path.dirname(settings), { recursive: true });
     const original = '{ "model": "some-model", oops this is not json';
     await writeFile(settings, original, "utf8");
@@ -1536,7 +1686,7 @@ describe("trace installation", () => {
   it("pins the interpreter in the Pi extension instead of trusting PATH", async () => {
     await runInit({ cwd: tmp, target: "pi", nonInteractive: true });
 
-    await enableTrace(tmp);
+    await enableTrace(tmp, { allowShared: true });
 
     const extension = await readFile(path.join(tmp, ".pi/extensions/wep-trace.ts"), "utf8");
     expect(extension).not.toContain('spawn("wep"');
@@ -1546,7 +1696,7 @@ describe("trace installation", () => {
 
   it("removes the Pi extension on disable instead of only claiming to", async () => {
     await runInit({ cwd: tmp, target: "pi", nonInteractive: true });
-    await enableTrace(tmp);
+    await enableTrace(tmp, { allowShared: true });
     const extension = path.join(tmp, ".pi/extensions/wep-trace.ts");
     expect(await exists(extension)).toBe(true);
 
@@ -1560,7 +1710,7 @@ describe("trace installation", () => {
   it("writes a Pi extension rather than a hook config", async () => {
     await runInit({ cwd: tmp, target: "pi", nonInteractive: true });
 
-    await enableTrace(tmp);
+    await enableTrace(tmp, { allowShared: true });
 
     const extension = await readFile(path.join(tmp, ".pi/extensions/wep-trace.ts"), "utf8");
     expect(extension).toContain('pi.on("tool_call"');
@@ -1572,7 +1722,7 @@ describe("trace installation", () => {
     "reports Pi as unwired when the extension is missing %s",
     async (listener) => {
       await runInit({ cwd: tmp, target: "pi", nonInteractive: true });
-      await enableTrace(tmp);
+      await enableTrace(tmp, { allowShared: true });
       const extensionPath = path.join(tmp, ".pi/extensions/wep-trace.ts");
       await writeFile(
         extensionPath,
@@ -1588,9 +1738,9 @@ describe("trace installation", () => {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-async function enableTrace(cwd: string): Promise<void> {
+async function enableTrace(cwd: string, options: { allowShared?: boolean } = {}): Promise<void> {
   const { runTraceEnable } = await import("../src/hook/install.js");
-  await runTraceEnable({ cwd, nonInteractive: true });
+  await runTraceEnable({ cwd, nonInteractive: true, ...options });
 }
 
 async function initGit(cwd: string): Promise<void> {

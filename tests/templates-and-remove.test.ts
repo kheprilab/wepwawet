@@ -362,12 +362,13 @@ describe("remove", () => {
     expect(await pathExists(path.join(tmp, ".wep"))).toBe(false);
   });
 
-  it("--all unwires tracing for every target before removing its config", async () => {
+  it("--all unwires tracing for every target (including legacy .claude/settings.json) before removing its config", async () => {
     await runInit({ cwd: tmp, target: "all", nonInteractive: true });
-    const claudeSettings = path.join(tmp, ".claude/settings.json");
-    await mkdir(path.dirname(claudeSettings), { recursive: true });
+    const claudeLocalSettings = path.join(tmp, ".claude/settings.local.json");
+    const claudeLegacySettings = path.join(tmp, ".claude/settings.json");
+    await mkdir(path.dirname(claudeLocalSettings), { recursive: true });
     await writeFile(
-      claudeSettings,
+      claudeLocalSettings,
       JSON.stringify({
         model: "keep-me",
         hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "foreign-pre" }] }] },
@@ -375,23 +376,51 @@ describe("remove", () => {
       "utf8",
     );
     const { runTraceEnable } = await import("../src/hook/install.js");
-    await runTraceEnable({ cwd: tmp, nonInteractive: true });
+    await runTraceEnable({ cwd: tmp, allowShared: true, nonInteractive: true });
+    // Simulate a legacy shared .claude/settings.json left by an older version.
+    await writeFile(
+      claudeLegacySettings,
+      JSON.stringify({
+        sharedKey: "keep-shared",
+        hooks: {
+          PreToolUse: [
+            { hooks: [{ type: "command", command: "shared-foreign" }] },
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: '"/usr/bin/node" "/old/wep.js" hook PreToolUse --wep-trace --wep-host claude',
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
 
     const result = await runRemove({ cwd: tmp, force: true, all: true, purgeLocal: true, nonInteractive: true });
 
     expect(await pathExists(path.join(tmp, ".wep/config.json"))).toBe(false);
-    const preservedClaude = await readFile(claudeSettings, "utf8");
-    expect(preservedClaude).toContain("foreign-pre");
-    expect(preservedClaude).toContain("keep-me");
-    expect(preservedClaude).not.toContain("--wep-trace");
+    const preservedLocal = await readFile(claudeLocalSettings, "utf8");
+    expect(preservedLocal).toContain("foreign-pre");
+    expect(preservedLocal).toContain("keep-me");
+    expect(preservedLocal).not.toContain("--wep-trace");
+    const preservedLegacy = await readFile(claudeLegacySettings, "utf8");
+    expect(preservedLegacy).toContain("shared-foreign");
+    expect(preservedLegacy).toContain("keep-shared");
+    expect(preservedLegacy).not.toContain("--wep-trace");
     expect(await readFile(path.join(tmp, ".codex/hooks.json"), "utf8")).not.toContain("--wep-trace");
     expect(await readFile(path.join(tmp, ".github/hooks/wep-trace.json"), "utf8")).not.toContain("--wep-trace");
+    expect(await readFile(path.join(tmp, ".agents/hooks.json"), "utf8")).not.toContain("--wep-trace");
     expect(await pathExists(path.join(tmp, ".pi/extensions/wep-trace.ts"))).toBe(false);
     expect(result.updated).toEqual(
       expect.arrayContaining([
+        ".claude/settings.local.json",
         ".claude/settings.json",
         ".codex/hooks.json",
         ".github/hooks/wep-trace.json",
+        ".agents/hooks.json",
         ".pi/extensions/wep-trace.ts",
       ]),
     );
@@ -400,14 +429,14 @@ describe("remove", () => {
   it("--all dry-run plans trace cleanup without changing hooks", async () => {
     await runInit({ cwd: tmp, target: "all", nonInteractive: true });
     const { runTraceEnable } = await import("../src/hook/install.js");
-    await runTraceEnable({ cwd: tmp, nonInteractive: true });
-    const settingsPath = path.join(tmp, ".claude/settings.json");
+    await runTraceEnable({ cwd: tmp, allowShared: true, nonInteractive: true });
+    const settingsPath = path.join(tmp, ".claude/settings.local.json");
     const before = await readFile(settingsPath, "utf8");
 
     const result = await runRemove({ cwd: tmp, all: true, nonInteractive: true });
 
     expect(result.dryRun).toBe(true);
-    expect(result.updated).toContain(".claude/settings.json");
+    expect(result.updated).toContain(".claude/settings.local.json");
     expect(await readFile(settingsPath, "utf8")).toBe(before);
     expect(await pathExists(path.join(tmp, ".wep/config.json"))).toBe(true);
     expect(await pathExists(path.join(tmp, ".pi/extensions/wep-trace.ts"))).toBe(true);

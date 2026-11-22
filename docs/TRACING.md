@@ -11,31 +11,38 @@ Run these commands in an initialized project:
 ```bash
 wep trace enable --dry-run
 wep trace enable
+wep trace enable --allow-shared
 wep trace status
 wep trace report
 wep trace report --json
 wep trace disable
 ```
 
-`enable` wires every installed target and sets `trace.enabled` to true. `disable` removes
-wep-owned trace entries, sets the flag to false, and keeps existing records. `--dry-run`
-previews either operation without changing settings. `status` reports the configuration flag,
-actual wiring, recorded session count, and hosts that have not been exercised in a conformance
-run. `report` derives metrics from local records; it does not contact a service. All four
-commands accept `--json`.
+`enable` wires installed targets that can hold machine-pinned hooks safely and sets
+`trace.enabled` to true. Claude Code always writes to its per-developer local settings file
+(`.claude/settings.local.json`) and migrates any legacy `wep-trace` entries out of
+`.claude/settings.json` while preserving foreign settings and hooks. For hosts without a
+dedicated local settings file (`codex`, `copilot`, `antigravity`, `pi`), `enable` wires the
+target only when Git ignores the hook path (`git check-ignore`); otherwise it skips that target
+with a warning unless `--allow-shared` is passed. `disable` (and `wep remove`) removes
+wep-owned trace entries from both current and legacy paths (including `.claude/settings.json`),
+sets the flag to false, and keeps existing records. `--dry-run` previews either operation
+without changing settings. `status` reports the configuration flag, actual wiring, recorded
+session count, and hosts that have not been exercised in a conformance run. `report` derives
+metrics from local records; it does not contact a service. All four commands accept `--json`.
 
 Records are JSONL files under `.wep/local/traces/`. Normal task-enabled initialization creates
 an ignore rule for `.wep/local/`. If using a minimal module installation, check the directory is
 ignored before recording. Disabling tracing does not delete these files. Review any local
 records before sharing them.
 
-| Target | Wiring file |
-| --- | --- |
-| Claude Code | `.claude/settings.json` |
-| Codex | `.codex/hooks.json` |
-| GitHub Copilot | `.github/hooks/wep-trace.json` |
-| Pi | `.pi/extensions/wep-trace.ts` |
-| Antigravity | `.agents/hooks.json` (`wep-trace` entry) |
+| Target | Wiring file | Default behavior on `wep trace enable` |
+| --- | --- | --- |
+| Claude Code | `.claude/settings.local.json` | Always wired (migrates legacy entries out of `.claude/settings.json`) |
+| Codex | `.codex/hooks.json` | Wired only if Git-ignored, or with `--allow-shared` |
+| GitHub Copilot | `.github/hooks/wep-trace.json` | Wired only if Git-ignored, or with `--allow-shared` |
+| Pi | `.pi/extensions/wep-trace.ts` | Wired only if Git-ignored, or with `--allow-shared` |
+| Antigravity | `.agents/hooks.json` (`wep-trace` entry) | Wired only if Git-ignored, or with `--allow-shared` |
 
 JSON settings retain unrelated entries; the Pi extension occupies a wep-specific file.
 Hook commands pin the Node executable and CLI build used by `enable`. Rerun `enable` after
@@ -45,9 +52,9 @@ Copilot, Pi, and Antigravity wiring as unverified: those adapters follow host do
 has been exercised by an observed run. Wiring alone does not prove that a host is delivering
 all expected events.
 
-Trace hooks are separate from the Claude Code judge run guard. When installed, that guard can
-refuse file-writing tools during validation. Disabling tracing leaves it in place. See
-[Judge](JUDGE.md).
+Trace hooks are separate from the Claude Code judge run guard. Both live in
+`.claude/settings.local.json` under distinct markers (`--wep-trace` and `--wep-guard`), so
+enabling or disabling tracing leaves the guard in place. See [Judge](JUDGE.md).
 
 ## Privacy
 

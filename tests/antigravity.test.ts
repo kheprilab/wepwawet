@@ -202,7 +202,7 @@ describe("antigravity target (AC-1..AC-10)", () => {
         "utf8",
       );
 
-      const enabled = await runTraceEnable({ cwd: tmp });
+      const enabled = await runTraceEnable({ cwd: tmp, allowShared: true });
       expect(enabled.wiredTargets).toContain("antigravity");
       const hooks = JSON.parse(await readFile(path.join(tmp, ".agents/hooks.json"), "utf8"));
       expect(hooks["user-linter"]).toBeDefined();
@@ -223,7 +223,7 @@ describe("antigravity target (AC-1..AC-10)", () => {
 
     it("normalizes Antigravity payloads, classifies GEMINI.md, emits stdout JSON, and completes on Stop", async () => {
       await runInit({ cwd: tmp, target: "antigravity", nonInteractive: true });
-      await runTraceEnable({ cwd: tmp });
+      await runTraceEnable({ cwd: tmp, allowShared: true });
 
       const normalized = normalizePayload("PreToolUse", {
         conversationId: "conv-123",
