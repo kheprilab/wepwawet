@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/kheprilab/wepwawet/compare/wepwawet-v0.9.0...wepwawet-v0.10.0) (2026-11-22)
+
+
+### Features
+
+* add Antigravity as a supported target ([#45](https://github.com/kheprilab/wepwawet/issues/45)) ([58fbedc](https://github.com/kheprilab/wepwawet/commit/58fbedc2ccd3c99db00c8954589a95472ae0fa34))
+
+
+### Bug Fixes
+
+* do not detect Antigravity from GEMINI.md alone ([#48](https://github.com/kheprilab/wepwawet/issues/48)) ([8d541d7](https://github.com/kheprilab/wepwawet/commit/8d541d7a855e78cc47367a20b399cb902e9365da))
+* keep machine-pinned trace hooks out of versioned host settings ([#53](https://github.com/kheprilab/wepwawet/issues/53)) ([993d714](https://github.com/kheprilab/wepwawet/commit/993d7146a99146ab76eca4d99165dbae16e2c413))
+* use AGENTS.md as the Antigravity root instruction ([#51](https://github.com/kheprilab/wepwawet/issues/51)) ([cd92c93](https://github.com/kheprilab/wepwawet/commit/cd92c9396afd3453c9c70836b0a2db398401fff6))
+
 ## [0.9.0](https://github.com/kheprilab/wepwawet/compare/wepwawet-v0.8.0...wepwawet-v0.9.0) (2026-11-21)
 
 
