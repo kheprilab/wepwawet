@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/kheprilab/wepwawet/compare/wepwawet-v0.10.0...wepwawet-v0.10.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* mention --approve-commands when approve-commands waits for confirmation ([#56](https://github.com/kheprilab/wepwawet/issues/56)) ([8fe1b21](https://github.com/kheprilab/wepwawet/commit/8fe1b215c0fc826e83e53ff4cc33e1090164f113))
+* use valid Antigravity tool names in generated subagent frontmatter ([#60](https://github.com/kheprilab/wepwawet/issues/60)) ([8026c9a](https://github.com/kheprilab/wepwawet/commit/8026c9accaf925be2d21b93d69da9b821eac053e))
+
 ## [0.10.0](https://github.com/kheprilab/wepwawet/compare/wepwawet-v0.9.0...wepwawet-v0.10.0) (2026-11-22)
 
 
