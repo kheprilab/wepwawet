@@ -737,21 +737,24 @@ export function registerJudge(program: Command): void {
  * list that was shown instead of assembling a plausible one by hand, and that confirmation is the
  * whole control.
  */
+export interface ApproveCommandsOptions {
+  origin?: string;
+  invocation?: string;
+  prompt?: string;
+}
+
 export async function approveCommands(
   declared: string[],
   approved: string[],
-  origin = "come from the capsule's task.md and will run in a disposable copy",
+  originOrOptions?: string | ApproveCommandsOptions,
 ): Promise<boolean> {
+  const opts = typeof originOrOptions === "string" ? { origin: originOrOptions } : (originOrOptions ?? {});
+  const origin = opts.origin ?? "come from the capsule's task.md and will run in a disposable copy";
+  const prompt = opts.prompt ?? "Run them? [y/N] ";
   const asFlags = declared.map((command) => `--approve-commands ${JSON.stringify(command)}`).join(" ");
-  if (!process.stdin.isTTY) {
-    if (approved.length === 0) {
-      ln();
-      log(`  ${dim("Nothing ran. These commands need your approval:")}`);
-      for (const [index, command] of declared.entries()) log(`    ${index + 1}. ${cmd(command)}`);
-      ln();
-      log(`  ${dim("Read them, then re-run with:")} ${cmd(asFlags)}`);
-      return false;
-    }
+  const headless = opts.invocation ? `${opts.invocation} ${asFlags}` : asFlags;
+
+  if (approved.length > 0) {
     const trimmed = approved.map((command) => command.trim());
     for (let index = 0; index < Math.max(trimmed.length, declared.length); index += 1) {
       if (trimmed[index] === declared[index]) continue;
@@ -760,20 +763,30 @@ export async function approveCommands(
       log(`    ${dim("expected")} ${cmd(JSON.stringify(declared[index] ?? "(no further command)"))}`);
       log(`    ${dim("got")} ${cmd(JSON.stringify(trimmed[index] ?? "(nothing)"))}`);
       ln();
-      log(`  ${dim("Approve exactly:")} ${cmd(asFlags)}`);
+      log(`  ${dim("Approve exactly:")} ${cmd(headless)}`);
       return false;
     }
     return true;
+  }
+
+  if (!process.stdin.isTTY) {
+    ln();
+    log(`  ${dim("Nothing ran. These commands need your approval:")}`);
+    for (const [index, command] of declared.entries()) log(`    ${index + 1}. ${cmd(command)}`);
+    ln();
+    log(`  ${dim("Read them, then re-run with:")} ${cmd(headless)}`);
+    return false;
   }
 
   ln();
   log(`  ${bold(`These commands ${origin}:`)}`);
   for (const [index, command] of declared.entries()) log(`    ${index + 1}. ${cmd(command)}`);
   ln();
+  log(`  ${dim("Or re-run non-interactively with:")} ${cmd(headless)}`);
   const { createInterface } = await import("node:readline/promises");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await rl.question("  Run them? [y/N] ");
+    const answer = await rl.question(`  ${prompt}`);
     return /^y(es)?$/i.test(answer.trim());
   } finally {
     rl.close();
