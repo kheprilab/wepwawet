@@ -193,7 +193,12 @@ export function registerTask(program: Command): void {
     const approved = Array.isArray(raw.approveCommands) ? (raw.approveCommands as string[]) : [];
     const record = await approveTaskValidationCommands(cwd, taskId, {
       dryRun: options.dryRun,
-      approve: (commands) => approveCommands(commands, approved),
+      approve: (commands) =>
+        approveCommands(commands, approved, {
+          origin: "come from the capsule's task.md and will be pre-approved for validation runs",
+          invocation: `wep task approve-commands ${taskId}`,
+          prompt: "Approve them? [y/N] ",
+        }),
     });
     if (options.json) {
       console.log(JSON.stringify(record, null, 2));
