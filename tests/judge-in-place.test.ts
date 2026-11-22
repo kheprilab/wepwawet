@@ -569,14 +569,29 @@ describe("guard installation", () => {
     expect(config.agents?.judge?.enabled ?? config.judge?.enabled).toBe(false);
   });
 
-  it("coexists with the session trace without either removing the other", async () => {
+  it("coexists with the session trace in settings.local.json without either removing the other", async () => {
     await runInit({ cwd: tmp, target: "claude", nonInteractive: true });
 
     await runTraceEnable({ cwd: tmp, nonInteractive: true });
     await runJudgeEnable({ cwd: tmp, nonInteractive: true });
 
     expect(await guardEntries()).toHaveLength(1);
-    expect(await readFile(path.join(tmp, ".claude/settings.json"), "utf8")).toContain("--wep-trace");
+    const localContent = await readFile(localSettings(), "utf8");
+    expect(localContent).toContain("--wep-trace");
+    expect(localContent).toContain("--wep-guard");
+    expect(await readFile(path.join(tmp, ".claude/settings.json"), "utf8").catch(() => "")).not.toContain(
+      "--wep-trace",
+    );
+
+    await runJudgeDisable({ cwd: tmp, nonInteractive: true });
+    expect(await guardEntries()).toHaveLength(0);
+    expect(await readFile(localSettings(), "utf8")).toContain("--wep-trace");
+
+    await runJudgeEnable({ cwd: tmp, nonInteractive: true });
+    const { runTraceDisable } = await import("../src/hook/install.js");
+    await runTraceDisable({ cwd: tmp, nonInteractive: true });
+    expect(await guardEntries()).toHaveLength(1);
+    expect(await readFile(localSettings(), "utf8")).not.toContain("--wep-trace");
   });
 });
 

@@ -201,6 +201,7 @@ export interface CommandOptions {
   cwd?: string;
   nonInteractive?: boolean;
   repair?: boolean;
+  allowShared?: boolean;
 }
 
 export interface DetectionResult {

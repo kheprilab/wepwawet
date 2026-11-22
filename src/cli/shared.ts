@@ -48,6 +48,7 @@ export function normalizeOptions(raw: Record<string, unknown>): CommandOptions {
     template: raw.template as string | undefined,
     templatePack: raw.templatePack as string | undefined,
     nonInteractive: !process.stdin.isTTY || !process.stdout.isTTY,
+    allowShared: Boolean(raw.allowShared),
     ...(raw.all !== undefined ? { all: Boolean(raw.all) } : {}),
   } as CommandOptions & { all?: boolean };
 }

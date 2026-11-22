@@ -406,4 +406,41 @@ describe("CLI layer — main(argv)", () => {
     expect(logs.join("\n")).not.toContain("round recorded");
     process.exitCode = 0;
   });
+
+  it("wep trace enable warns on skipped shared targets and supports --allow-shared in human and JSON output", async () => {
+    await runInit({ cwd: tmp, target: "claude,codex", nonInteractive: true });
+
+    const human = captureLogs();
+    try {
+      await main(["node", "wep", "trace", "enable"]);
+    } finally {
+      human.restore();
+    }
+    const humanOutput = human.logs.join("\n");
+    expect(humanOutput).toContain(".claude/settings.local.json");
+    expect(humanOutput).toContain("Skipped codex");
+    expect(humanOutput).toContain("--allow-shared");
+
+    const jsonSkipped = captureLogs();
+    try {
+      await main(["node", "wep", "trace", "enable", "--json"]);
+    } finally {
+      jsonSkipped.restore();
+    }
+    const parsedSkipped = JSON.parse(jsonSkipped.logs.join("\n"));
+    expect(parsedSkipped.wiredTargets).toEqual(["claude"]);
+    expect(parsedSkipped.skippedTargets).toEqual(["codex"]);
+    expect(parsedSkipped.warnings).toHaveLength(1);
+
+    const jsonAllowed = captureLogs();
+    try {
+      await main(["node", "wep", "trace", "enable", "--allow-shared", "--json"]);
+    } finally {
+      jsonAllowed.restore();
+    }
+    const parsedAllowed = JSON.parse(jsonAllowed.logs.join("\n"));
+    expect(parsedAllowed.wiredTargets).toEqual(["claude", "codex"]);
+    expect(parsedAllowed.skippedTargets).toEqual([]);
+    expect(parsedAllowed.warnings).toEqual([]);
+  });
 });

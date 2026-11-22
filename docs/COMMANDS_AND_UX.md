@@ -422,17 +422,22 @@ Opt into local session observations and inspect the resulting reports:
 ```bash
 wep trace enable --dry-run
 wep trace enable
+wep trace enable --allow-shared
 wep trace status --json
 wep trace report --json
 wep trace disable
 ```
 
-Tracing starts off. Enable wires hooks for installed targets and pins them to the
-current built CLI. The trace is observational and fail-open; it does not approve or
-block tools. Records remain local under `.wep/local/traces/`. Disable removes owned
-hook entries and retains previous records. Host event coverage varies; unsupported or
-unverified observations must not be treated as proof of conformance. See
-[TRACING.md](TRACING.md) for recorded fields, hook files, report predicates, and limits.
+Tracing starts off. Enable wires Claude Code into `.claude/settings.local.json` (migrating
+any legacy trace entries out of `.claude/settings.json`) and pins hooks to the current built
+CLI. For hosts without a local settings file (`codex`, `copilot`, `antigravity`, `pi`), enable
+wires them only when Git ignores the hook file (`git check-ignore`) or when `--allow-shared`
+is passed; otherwise it skips them with a warning. The trace is observational and fail-open; it
+does not approve or block tools. Records remain local under `.wep/local/traces/`. Disable (and
+`wep remove`) removes owned hook entries from current and legacy files and retains previous
+records. Host event coverage varies; unsupported or unverified observations must not be treated
+as proof of conformance. See [TRACING.md](TRACING.md) for recorded fields, hook files, report
+predicates, and limits.
 
 ---
 

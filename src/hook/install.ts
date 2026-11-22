@@ -1,9 +1,13 @@
+import { execFile } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { readConfig, writeConfig } from "../config.js";
 import { pathExists, writePlannedFile } from "../fs-utils.js";
 import type { CommandOptions, Target } from "../types.js";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Events phase 1 listens to.
@@ -93,6 +97,7 @@ export interface TraceInstallResult {
   writes: string[];
   wiredTargets: Target[];
   skippedTargets: Target[];
+  warnings: string[];
 }
 
 export interface TraceStatusResult {
@@ -105,12 +110,34 @@ export interface TraceStatusResult {
 }
 
 const hostConfigPath: Record<Target, string> = {
-  claude: ".claude/settings.json",
+  claude: ".claude/settings.local.json",
   codex: ".codex/hooks.json",
   copilot: ".github/hooks/wep-trace.json",
   pi: ".pi/extensions/wep-trace.ts",
   antigravity: ".agents/hooks.json",
 };
+
+/** Hosts that provide a dedicated per-developer, non-versioned settings file. */
+const localHostTargets = new Set<Target>(["claude"]);
+
+/** Older wiring paths still cleaned up on enable (migration), disable, and remove. */
+const legacyHostConfigPaths: Partial<Record<Target, readonly string[]>> = {
+  claude: [".claude/settings.json"],
+};
+
+/**
+ * True only when `cwd` is inside a Git repository and Git ignores `relative` (untracked and
+ * matched by ignore rules). Fails closed to false when `relative` is tracked, unignored, or
+ * outside a Git repository so machine-pinned hooks never land in a shared file by accident.
+ */
+async function isGitIgnored(cwd: string, relative: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["check-ignore", "-q", "--", relative], { cwd });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function runTraceEnable(options: CommandOptions): Promise<TraceInstallResult> {
   const cwd = options.cwd ?? process.cwd();
@@ -118,9 +145,27 @@ export async function runTraceEnable(options: CommandOptions): Promise<TraceInst
   if (!config) throw new Error("wep is not installed. Run `wep init` first.");
 
   const writes: string[] = [];
+  const wiredTargets: Target[] = [];
+  const skippedTargets: Target[] = [];
+  const warnings: string[] = [];
+
   for (const target of config.targets) {
+    const relative = hostConfigPath[target];
+    if (!localHostTargets.has(target) && !options.allowShared && !(await isGitIgnored(cwd, relative))) {
+      skippedTargets.push(target);
+      warnings.push(
+        `Skipped ${target} (${relative}): file is not ignored by Git and trace hooks pin local paths. Add ${relative} to .gitignore or rerun with \`wep trace enable --allow-shared\`.`,
+      );
+      continue;
+    }
     const written = await wireTarget(cwd, target, options);
     if (written) writes.push(written);
+    wiredTargets.push(target);
+
+    for (const legacyPath of legacyHostConfigPaths[target] ?? []) {
+      const cleaned = await unwireTargetPath(cwd, target, legacyPath, options);
+      if (cleaned) writes.push(cleaned);
+    }
   }
   if (!options.dryRun) {
     await writeConfig(cwd, { ...config, trace: { enabled: true } });
@@ -129,8 +174,9 @@ export async function runTraceEnable(options: CommandOptions): Promise<TraceInst
     dryRun: Boolean(options.dryRun),
     enabled: true,
     writes,
-    wiredTargets: [...config.targets],
-    skippedTargets: [],
+    wiredTargets,
+    skippedTargets,
+    warnings,
   };
 }
 
@@ -149,6 +195,7 @@ export async function runTraceDisable(options: CommandOptions): Promise<TraceIns
     writes,
     wiredTargets: [],
     skippedTargets: [...config.targets],
+    warnings: [],
   };
 }
 
@@ -169,7 +216,7 @@ export async function unwireTraceTargets(
   const writes: string[] = [];
   for (const target of new Set(targetsToClean)) {
     const removed = await unwireTarget(cwd, target, options);
-    if (removed) writes.push(removed);
+    writes.push(...removed);
   }
   return writes;
 }
@@ -223,12 +270,22 @@ async function wireTarget(cwd: string, target: Target, options: CommandOptions):
   return relative;
 }
 
-async function unwireTarget(
+async function unwireTarget(cwd: string, target: Target, options: Pick<CommandOptions, "dryRun">): Promise<string[]> {
+  const paths = [hostConfigPath[target], ...(legacyHostConfigPaths[target] ?? [])];
+  const writes: string[] = [];
+  for (const relative of paths) {
+    const removed = await unwireTargetPath(cwd, target, relative, options);
+    if (removed) writes.push(removed);
+  }
+  return writes;
+}
+
+async function unwireTargetPath(
   cwd: string,
   target: Target,
+  relative: string,
   options: Pick<CommandOptions, "dryRun">,
 ): Promise<string | undefined> {
-  const relative = hostConfigPath[target];
   if (!(await pathExists(path.join(cwd, relative)))) return undefined;
   if (target === "pi") {
     // The path is reserved by wep, but `remove --all` now inspects every target even
@@ -265,14 +322,17 @@ async function unwireTarget(
   // Remove only wep entries, then drop events left empty. Everything else is the
   // user's and survives untouched.
   const cleaned: Record<string, unknown> = {};
+  let changed = false;
   for (const [event, entries] of Object.entries(hooks as Record<string, unknown>)) {
     if (!Array.isArray(entries)) {
       cleaned[event] = entries;
       continue;
     }
     const kept = entries.filter((entry) => !isWepEntry(entry));
+    if (kept.length !== entries.length) changed = true;
     if (kept.length > 0) cleaned[event] = kept;
   }
+  if (!changed) return undefined;
   // Drop the hooks key entirely when nothing of the user's remains, rather than leaving an
   // empty object behind in a settings file wep does not own.
   const { hooks: _removed, ...rest } = existing;

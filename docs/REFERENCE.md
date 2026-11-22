@@ -153,7 +153,7 @@ AGENTS.md or AGENTS.wep.suggested.md
 .codex/agents/wep-implementer.toml   # opt-in: impl enable
 ```
 
-Claude, Copilot, Pi Code, and Antigravity receive their own target adapters under `CLAUDE.md`, `.claude/`, `.github/`, `.pi/`, or `AGENTS.md` + `.agents/agents/`. Claude, Pi Code, and Antigravity get `SKILL.md` workflow packages (Antigravity shares `AGENTS.md` and `.agents/skills/` with Codex and wires trace hooks in `.agents/hooks.json`); Copilot gets repository instructions, skills, and reusable prompt files.
+Claude, Copilot, Pi Code, and Antigravity receive their own target adapters under `CLAUDE.md`, `.claude/`, `.github/`, `.pi/`, or `AGENTS.md` + `.agents/agents/`. Claude, Pi Code, and Antigravity get `SKILL.md` workflow packages (Antigravity shares `AGENTS.md` and `.agents/skills/` with Codex and wires trace hooks in `.agents/hooks.json` when Git-ignored or opted in with `--allow-shared`; Claude writes trace hooks to `.claude/settings.local.json`); Copilot gets repository instructions, skills, and reusable prompt files.
 
 ### Agent discovery
 
