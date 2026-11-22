@@ -118,7 +118,7 @@ description: >
   ${description}
 subagent: true
 mainAgent: false
-tools: [view_file, find_file, create_file, edit_file, run_command]
+tools: [read_file, write_file, edit_file, run_command]
 ${frontmatterModel(model)}---
 
 # wep Implementer

@@ -162,19 +162,22 @@ describe("antigravity target (AC-1..AC-10)", () => {
       expect(judge).toContain("name: wep-judge");
       expect(judge).toContain("subagent: true");
       expect(judge).toContain("mainAgent: false");
-      expect(judge).toContain("tools: [view_file, find_file, run_command]");
+      expect(judge).toContain("tools: [read_file, run_command]");
+      expect(judge).not.toMatch(/\b(view_file|find_file|create_file)\b/);
 
       const impl = await readFile(path.join(tmp, ".agents/agents/wep-implementer.md"), "utf8");
       expect(impl).toContain("name: wep-implementer");
       expect(impl).toContain("subagent: true");
       expect(impl).toContain("mainAgent: false");
-      expect(impl).toContain("tools: [view_file, find_file, create_file, edit_file, run_command]");
+      expect(impl).toContain("tools: [read_file, write_file, edit_file, run_command]");
+      expect(impl).not.toMatch(/\b(view_file|find_file|create_file)\b/);
 
       const comp = await readFile(path.join(tmp, ".agents/agents/wep-comprehension.md"), "utf8");
       expect(comp).toContain("name: wep-comprehension");
       expect(comp).toContain("subagent: true");
       expect(comp).toContain("mainAgent: false");
-      expect(comp).toContain("tools: [view_file, find_file, run_command]");
+      expect(comp).toContain("tools: [read_file, run_command]");
+      expect(comp).not.toMatch(/\b(view_file|find_file|create_file)\b/);
       expect(comp).toMatch(/independent thread|separate thread/i);
 
       const emitted = emitTemplateAgent("security-reviewer", "# Security Reviewer\n\nAudit diffs.", "antigravity");
@@ -182,8 +185,9 @@ describe("antigravity target (AC-1..AC-10)", () => {
       expect(emitted[".agents/agents/security-reviewer.md"]).toContain("subagent: true");
       expect(emitted[".agents/agents/security-reviewer.md"]).toContain("mainAgent: false");
       expect(emitted[".agents/agents/security-reviewer.md"]).toContain(
-        "tools: [view_file, find_file, create_file, edit_file, run_command]",
+        "tools: [read_file, write_file, edit_file, run_command]",
       );
+      expect(emitted[".agents/agents/security-reviewer.md"]).not.toMatch(/\b(view_file|find_file|create_file)\b/);
 
       expect(modelPatterns.antigravity.pattern.test("gemini-2.5-pro")).toBe(true);
       expect(modelPatterns.antigravity.pattern.test("flash")).toBe(true);

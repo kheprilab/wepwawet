@@ -106,7 +106,7 @@ name: wep-comprehension
 description: Independent, interactive code-learning evaluator. Invoke only after the developer accepts the checkpoint and, when enabled, the judge approved the same change boundary.
 subagent: true
 mainAgent: false
-tools: [view_file, find_file, run_command]
+tools: [read_file, run_command]
 ${frontmatterModel(model)}---
 
 # wep Comprehension Evaluator
