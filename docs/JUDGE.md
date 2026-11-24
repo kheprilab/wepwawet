@@ -768,8 +768,24 @@ Enabling requires the installed judge contract and safe local ignore; follow the
 By default the judge expects the harness to be versioned with the project. The snapshot takes
 `.wep/policy.json` and the task capsule from Git, like any other file. Some projects keep
 `.wep/` out of Git: task capsules that must not be public with the code, a security fix that
-cannot be described before the patch ships, or a harness kept in a separate private repository
-and linked as a `.wep` symlink. For those, set the harness mode:
+cannot be described before the patch ships, or a harness kept in a private repository.
+For a private harness, clone that repository into a real `.wep/` directory inside the
+project. Have the project's Git ignore `.wep/`, and have the nested repository ignore
+`local/` so snapshots, receipts, and other local state are not committed with its capsules.
+For example, add `.wep/` to the project's `.gitignore` and `local/` to `.wep/.gitignore`.
+
+This layout keeps harness writes inside the open project folder for sandboxed agents.
+A `.wep` symlink to an external directory is still supported, but its target may be outside
+the sandbox: `wep task approve-commands`, `wep judge snapshot`, and `wep judge run` can
+then require permission to write there. A nested clone avoids that extra permission for
+harness writes; it does not change the host's permissions for the project's own `.git/`.
+
+Until [#66](https://github.com/kheprilab/wepwawet/issues/66) is fixed, `wep remove --all`
+also deletes `.wep/.git/` in a nested clone, including unpushed commits and the repository's
+remote configuration. Back up the entire nested repository before removal, and inspect
+`wep remove --all --dry-run` first.
+
+For a harness ignored by the project's Git, set the harness mode:
 
 ```bash
 wep config set agents.judge.harness ignored
@@ -809,7 +825,8 @@ Capture checks that the Git setup matches the mode before it copies anything:
 `wep doctor` reports the first two cases as warnings, so they show up before the first review.
 
 Keeping the harness out of Git also takes it out of Git's history and backups. Version it
-somewhere else, for example in a private repository linked as `.wep`, so capsules are not lost.
+separately, for example in the private repository cloned into `.wep/`, and push capsule
+commits to its remote so they are not lost with the local checkout.
 
 ## Setting a model
 
