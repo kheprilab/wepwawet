@@ -120,6 +120,71 @@ describe("with a temporary repository", () => {
     expect(await readFile(path.join(root, ".claude/settings.json"), "utf8")).toBe(JSON.stringify(tracked));
   });
 
+  it("rewires Antigravity hooks in .agents/hooks.json and preserves foreign hooks", async () => {
+    const antigravity = {
+      "foreign-hook": {
+        Stop: [{ type: "command", command: "echo keep-me", timeout: 5 }],
+      },
+      "wep-trace": {
+        SessionStart: [
+          { type: "command", command: pinned("hook SessionStart --wep-trace --wep-host antigravity"), timeout: 5 },
+        ],
+        PreToolUse: [
+          {
+            matcher: "*",
+            hooks: [
+              { type: "command", command: pinned("hook PreToolUse --wep-trace --wep-host antigravity"), timeout: 5 },
+            ],
+          },
+        ],
+        PostToolUse: [
+          {
+            matcher: "*",
+            hooks: [
+              { type: "command", command: pinned("hook PostToolUse --wep-trace --wep-host antigravity"), timeout: 5 },
+            ],
+          },
+        ],
+        Stop: [{ type: "command", command: pinned("hook Stop --wep-trace --wep-host antigravity"), timeout: 5 }],
+      },
+    };
+    await mkdir(path.join(root, ".agents"), { recursive: true });
+    await writeFile(path.join(root, ".agents/hooks.json"), JSON.stringify(antigravity));
+
+    const result = await rewireHooks(root, { node: NODE, entry: ENTRY });
+
+    expect(result.rewritten).toEqual([".agents/hooks.json"]);
+    expect(result.skippedTracked).toEqual([]);
+    const rewritten = JSON.parse(await readFile(path.join(root, ".agents/hooks.json"), "utf8"));
+    expect(rewritten["foreign-hook"]).toEqual(antigravity["foreign-hook"]);
+    expect(rewritten["wep-trace"].SessionStart[0].command).toBe(hookCommand("SessionStart", "antigravity", ENTRY));
+    expect(rewritten["wep-trace"].PreToolUse[0].matcher).toBe("*");
+    expect(rewritten["wep-trace"].PreToolUse[0].hooks[0].command).toBe(hookCommand("PreToolUse", "antigravity", ENTRY));
+    expect(rewritten["wep-trace"].PostToolUse[0].matcher).toBe("*");
+    expect(rewritten["wep-trace"].PostToolUse[0].hooks[0].command).toBe(
+      hookCommand("PostToolUse", "antigravity", ENTRY),
+    );
+    expect(rewritten["wep-trace"].Stop[0].command).toBe(hookCommand("Stop", "antigravity", ENTRY));
+  });
+
+  it("never overwrites a tracked .agents/hooks.json", async () => {
+    const tracked = {
+      "wep-trace": {
+        Stop: [{ type: "command", command: pinned("hook Stop --wep-trace --wep-host antigravity"), timeout: 5 }],
+      },
+    };
+    await mkdir(path.join(root, ".agents"), { recursive: true });
+    await writeFile(path.join(root, ".agents/hooks.json"), JSON.stringify(tracked));
+    git("add", ".agents/hooks.json");
+    git("commit", "-qm", "chore: tracked antigravity hooks");
+
+    const result = await rewireHooks(root, { node: NODE, entry: ENTRY });
+
+    expect(result.rewritten).toEqual([]);
+    expect(result.skippedTracked).toEqual([".agents/hooks.json"]);
+    expect(await readFile(path.join(root, ".agents/hooks.json"), "utf8")).toBe(JSON.stringify(tracked));
+  });
+
   it("lets only one promote hold the lock", async () => {
     const dir = path.join(root, "lockdir");
     await mkdir(dir);

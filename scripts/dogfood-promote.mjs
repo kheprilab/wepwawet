@@ -32,6 +32,7 @@ const HOOK_FILES = [
   ".claude/settings.json",
   ".claude/settings.local.json",
   ".github/hooks/wep-trace.json",
+  ".agents/hooks.json",
 ];
 const PINNED = /^("(?:[^"\\]|\\.)*") ("(?:[^"\\]|\\.)*") (.+)$/;
 const STALE_LOCK_MS = 60 * 60 * 1000;
