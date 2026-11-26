@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.2](https://github.com/kheprilab/wepwawet/compare/wepwawet-v0.10.1...wepwawet-v0.10.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* keep a nested Git repository in .wep when removing the harness ([#72](https://github.com/kheprilab/wepwawet/issues/72)) ([1e3d030](https://github.com/kheprilab/wepwawet/commit/1e3d03029abef08e98d3dc6eb08486ed7c7c80b6))
+* resolve project root from payload cwd or ancestry in hooks ([#70](https://github.com/kheprilab/wepwawet/issues/70)) ([155b220](https://github.com/kheprilab/wepwawet/commit/155b2204747921b7cb6375563027b075e6abc2b3))
+
 ## [0.10.1](https://github.com/kheprilab/wepwawet/compare/wepwawet-v0.10.0...wepwawet-v0.10.1) (2026-11-22)
 
 
