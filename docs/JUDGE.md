@@ -780,10 +780,10 @@ the sandbox: `wep task approve-commands`, `wep judge snapshot`, and `wep judge r
 then require permission to write there. A nested clone avoids that extra permission for
 harness writes; it does not change the host's permissions for the project's own `.git/`.
 
-Until [#66](https://github.com/kheprilab/wepwawet/issues/66) is fixed, `wep remove --all`
-also deletes `.wep/.git/` in a nested clone, including unpushed commits and the repository's
-remote configuration. Back up the entire nested repository before removal, and inspect
-`wep remove --all --dry-run` first.
+When removing the harness from a nested clone, `wep remove --all` deletes only wep-owned
+entries under `.wep/`, preserving `.wep/.git/` and any non-wep-owned files (reporting what it
+kept under protected entries) and removing `.wep/` only when it is empty. Inspect
+`wep remove --all --dry-run` first before running with `--force`.
 
 For a harness ignored by the project's Git, set the harness mode:
 
