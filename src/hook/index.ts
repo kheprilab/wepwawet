@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { matchesBlockedPattern, readBlockedPatterns } from "../judge-enforcement.js";
 import { type NormalizedEvent, normalizePayload, parsePayload } from "./payload.js";
+import { resolveProjectRoot } from "./project-root.js";
 import { type Area, type TraceObservation, appendTrace, buildHeader } from "./trace.js";
 
 const execFileAsync = promisify(execFile);
@@ -57,8 +58,9 @@ export async function runHook(
   try {
     const event = normalizePayload(argvEvent, parsePayload(rawStdin));
     if (options.host === "antigravity") body = antigravityBody(event.event);
-    if (!(await tracingEnabled(cwd))) return noDecision(false, "tracing is not enabled", body);
-    await record(cwd, event, options.host);
+    const root = await resolveProjectRoot(event.cwd, cwd);
+    if (!root || !(await tracingEnabled(root))) return noDecision(false, "tracing is not enabled", body);
+    await record(root, event, options.host);
     return noDecision(true, undefined, body);
   } catch (error) {
     // Deliberately swallowed. A trace is diagnostics; the agent's session is the product.
