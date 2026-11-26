@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { normalizeConfig, readConfig, writeConfig } from "./config.js";
 import { ensureTrailingNewline, pathExists, suggestedPathFor, writePlannedFile } from "./fs-utils.js";
-import { hasModule } from "./harness-files.js";
+import { hasModule, templateCandidatesDir } from "./harness-files.js";
 import { contentHash, readManifest, templateHash, writeManifest } from "./manifest.js";
 import { type TemplatePack, loadBundledTemplatePack, loadTemplatePack, mergeTemplateJson } from "./template-pack.js";
 import { defaultPolicy } from "./templates.js";
@@ -235,7 +235,7 @@ export async function runTemplateUpdate(options: TemplateApplyOptions): Promise<
         ensureTrailingNewline(existingSuggestion) !== ensureTrailingNewline(planned.content)
       ) {
         conflicts.push(planned.path);
-        const candidatePath = path.posix.join(".wep/template-candidates", pack.name, pack.version, planned.path);
+        const candidatePath = path.posix.join(templateCandidatesDir, pack.name, pack.version, planned.path);
         const candidateWrite = await writePlannedFile(cwd, candidatePath, planned.content, {
           dryRun: options.dryRun,
           reason: `Resolve the existing ${suggestedPath}, then rerun to prepare this root merge.`,
@@ -296,7 +296,7 @@ export async function runTemplateUpdate(options: TemplateApplyOptions): Promise<
     // User modified the file: preserve it and write a candidate suggestion (D2).
     writes.push({ kind: "preserve", path: planned.path, reason: "User-modified file preserved." });
     conflicts.push(planned.path);
-    const candidatePath = path.posix.join(".wep/template-candidates", pack.name, pack.version, planned.path);
+    const candidatePath = path.posix.join(templateCandidatesDir, pack.name, pack.version, planned.path);
     const candidateWrite = await writePlannedFile(cwd, candidatePath, planned.content, {
       dryRun: options.dryRun,
       reason: `Review and merge into ${planned.path}.`,
@@ -486,7 +486,7 @@ async function preflightFiles(
         ensureTrailingNewline(existingSuggestion) !== ensureTrailingNewline(planned.content)
       ) {
         conflicts.push(planned.path);
-        const candidatePath = path.posix.join(".wep/template-candidates", pack.name, pack.version, planned.path);
+        const candidatePath = path.posix.join(templateCandidatesDir, pack.name, pack.version, planned.path);
         const candidateWrite = await writePlannedFile(cwd, candidatePath, planned.content, {
           dryRun: options.dryRun,
           reason: `Resolve the existing ${suggestedPath}, then rerun to prepare this root merge.`,
@@ -511,7 +511,7 @@ async function preflightFiles(
 
     conflicts.push(planned.path);
 
-    const candidatePath = path.posix.join(".wep/template-candidates", pack.name, pack.version, planned.path);
+    const candidatePath = path.posix.join(templateCandidatesDir, pack.name, pack.version, planned.path);
     const candidateWrite = await writePlannedFile(cwd, candidatePath, planned.content, {
       dryRun: options.dryRun,
       reason: `Review and merge into ${planned.path}.`,

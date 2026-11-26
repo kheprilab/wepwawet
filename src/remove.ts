@@ -3,9 +3,10 @@ import path from "node:path";
 import { agentFilePathList } from "./agents.js";
 import { readConfig } from "./config.js";
 import { pathExists } from "./fs-utils.js";
-import { protectedFiles, targetFilesForModules } from "./harness-files.js";
+import { protectedFiles, targetFilesForModules, topLevelWepEntry, wepOwnedTopLevelEntries } from "./harness-files.js";
 import { removeGuard } from "./hook/guard.js";
 import { unwireTraceTargets } from "./hook/install.js";
+import { readManifest } from "./manifest.js";
 import type { CommandOptions, Target } from "./types.js";
 import { agentNames, targets } from "./types.js";
 
@@ -73,17 +74,23 @@ export async function runRemove(
       const hasLocalRecords =
         !options.purgeLocal &&
         (await hasAnyLocalRecord(path.join(cfDir, "local"), ledgerExists ? ["upgrade-candidates.json"] : []));
+      const ownedEntries = await collectWepOwnedEntries(cwd);
+      const entries = await readdir(cfDir, { withFileTypes: true });
+      const nonWepEntries = entries
+        .filter((entry) => !ownedEntries.has(entry.name))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
       const preservedEntries = new Set<string>();
       if (hasTaskCapsules) preservedEntries.add("tasks");
       if (hasLocalRecords) preservedEntries.add("local");
+      for (const entry of nonWepEntries) preservedEntries.add(entry.name);
 
       if (preservedEntries.size > 0) {
-        // Preserve durable user records — remove everything else in .wep/.
+        // Preserve durable user records and non-wep entries — remove only wep-owned entries in .wep/.
         if (hasLocalRecords && ledgerExists) {
           planned.push(".wep/local/upgrade-candidates.json");
           if (!dryRun) await rm(upgradeCandidateLedger, { force: true });
         }
-        const entries = await readdir(cfDir, { withFileTypes: true });
         for (const entry of entries) {
           if (preservedEntries.has(entry.name)) continue;
           const relative = `.wep/${entry.name}${entry.isDirectory() ? "/" : ""}`;
@@ -94,6 +101,11 @@ export async function runRemove(
         }
         if (hasTaskCapsules) skippedProtected.push(".wep/tasks/ (kept — use --purge-tasks to delete)");
         if (hasLocalRecords) skippedProtected.push(".wep/local/ (kept — use --purge-local to delete personal records)");
+        for (const entry of nonWepEntries) {
+          const relative = `.wep/${entry.name}${entry.isDirectory() ? "/" : ""}`;
+          const reason = entry.name === ".git" ? "kept — nested Git repository" : "kept — not wep-owned";
+          skippedProtected.push(`${relative} (${reason})`);
+        }
       } else {
         planned.push(".wep/");
         if (!dryRun) {
@@ -104,6 +116,18 @@ export async function runRemove(
   }
 
   return { planned, updated, protected: skippedProtected, dryRun };
+}
+
+async function collectWepOwnedEntries(cwd: string): Promise<Set<string>> {
+  const owned = wepOwnedTopLevelEntries();
+  const manifest = await readManifest(cwd).catch(() => undefined);
+  if (manifest) {
+    for (const filePath of [...Object.keys(manifest.files), ...Object.keys(manifest.candidates ?? {})]) {
+      const top = topLevelWepEntry(filePath);
+      if (top && top !== ".git") owned.add(top);
+    }
+  }
+  return owned;
 }
 
 async function pruneEmptyAncestors(cwd: string, relativePath: string): Promise<string[]> {

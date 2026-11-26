@@ -526,6 +526,111 @@ describe("remove", () => {
 
     expect(await pathExists(agentPath)).toBe(false);
   });
+
+  it("--all preserves .git and non-wep files in .wep/ when no task capsules exist (dry-run and --force)", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await mkdir(path.join(tmp, ".wep/.git"), { recursive: true });
+    await writeFile(path.join(tmp, ".wep/.git/HEAD"), "ref: refs/heads/main\n", "utf8");
+    await writeFile(path.join(tmp, ".wep/.git/config"), "[core]\n", "utf8");
+    await writeFile(path.join(tmp, ".wep/README.md"), "# Private harness\n", "utf8");
+    await writeFile(path.join(tmp, ".wep/.gitignore"), "local/\n", "utf8");
+    await writeFile(path.join(tmp, ".wep/AGENTS.md"), "# Private harness instructions\n", "utf8");
+
+    const preview = await runRemove({ cwd: tmp, all: true, nonInteractive: true });
+    expect(preview.dryRun).toBe(true);
+    expect(preview.planned).not.toContain(".wep/");
+    expect(preview.planned).not.toContain(".wep/.git/");
+    expect(preview.planned).not.toContain(".wep/README.md");
+    expect(preview.planned).not.toContain(".wep/.gitignore");
+    expect(preview.planned).not.toContain(".wep/AGENTS.md");
+    expect(preview.planned).toEqual(expect.arrayContaining([".wep/config.json", ".wep/manifest.json", ".wep/wiki/"]));
+    for (const kept of [".wep/.git/", ".wep/README.md", ".wep/.gitignore", ".wep/AGENTS.md"]) {
+      expect(preview.protected.some((entry) => entry.includes(kept))).toBe(true);
+    }
+
+    const actual = await runRemove({ cwd: tmp, all: true, force: true, nonInteractive: true });
+    expect(actual.dryRun).toBe(false);
+    expect(actual.planned.slice().sort()).toEqual(preview.planned.slice().sort());
+    expect(actual.protected).toEqual(preview.protected);
+    expect(await pathExists(path.join(tmp, ".wep"))).toBe(true);
+    expect(await readFile(path.join(tmp, ".wep/.git/HEAD"), "utf8")).toBe("ref: refs/heads/main\n");
+    expect(await readFile(path.join(tmp, ".wep/.git/config"), "utf8")).toBe("[core]\n");
+    expect(await readFile(path.join(tmp, ".wep/README.md"), "utf8")).toBe("# Private harness\n");
+    expect(await readFile(path.join(tmp, ".wep/.gitignore"), "utf8")).toBe("local/\n");
+    expect(await readFile(path.join(tmp, ".wep/AGENTS.md"), "utf8")).toBe("# Private harness instructions\n");
+    expect(await pathExists(path.join(tmp, ".wep/config.json"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/manifest.json"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/policy.json"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/wiki"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/tasks"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/targets"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/judge"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/comprehension"))).toBe(false);
+  });
+
+  it("--all preserves .git and non-wep files alongside task capsules", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    const task = await runTask("Keep nested repo", { cwd: tmp, nonInteractive: true });
+    await mkdir(path.join(tmp, ".wep/.git"), { recursive: true });
+    await writeFile(path.join(tmp, ".wep/.git/HEAD"), "ref: refs/heads/main\n", "utf8");
+    await writeFile(path.join(tmp, ".wep/README.md"), "# Private harness\n", "utf8");
+    await writeFile(path.join(tmp, ".wep/.gitignore"), "local/\n", "utf8");
+    await writeFile(path.join(tmp, ".wep/AGENTS.md"), "# Private harness instructions\n", "utf8");
+
+    const preview = await runRemove({ cwd: tmp, all: true, nonInteractive: true });
+    for (const kept of [".wep/tasks/", ".wep/.git/", ".wep/README.md", ".wep/.gitignore", ".wep/AGENTS.md"]) {
+      expect(preview.protected.some((entry) => entry.includes(kept))).toBe(true);
+    }
+
+    const actual = await runRemove({ cwd: tmp, all: true, force: true, nonInteractive: true });
+    expect(actual.planned.slice().sort()).toEqual(preview.planned.slice().sort());
+    expect(actual.protected).toEqual(preview.protected);
+    expect(await pathExists(path.join(tmp, task.taskDir))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/.git/HEAD"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/README.md"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/.gitignore"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/AGENTS.md"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/config.json"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/wiki"))).toBe(false);
+
+    const purgedTasks = await runRemove({ cwd: tmp, all: true, purgeTasks: true, force: true, nonInteractive: true });
+    expect(await pathExists(path.join(tmp, task.taskDir))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/tasks"))).toBe(false);
+    expect(await pathExists(path.join(tmp, ".wep/.git/HEAD"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/README.md"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/.gitignore"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/AGENTS.md"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep"))).toBe(true);
+    for (const kept of [".wep/.git/", ".wep/README.md", ".wep/.gitignore", ".wep/AGENTS.md"]) {
+      expect(purgedTasks.protected.some((entry) => entry.includes(kept))).toBe(true);
+    }
+  });
+
+  it("--all --force removes standard .wep/ completely including doctor/, upgrades/, judge/, comprehension/, and template-candidates/", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await mkdir(path.join(tmp, ".wep/doctor"), { recursive: true });
+    await writeFile(path.join(tmp, ".wep/doctor/merge-decisions.json"), '{"version":1,"files":{}}\n', "utf8");
+    await mkdir(path.join(tmp, ".wep/upgrades/0.10.1"), { recursive: true });
+    await writeFile(path.join(tmp, ".wep/upgrades/0.10.1/AGENTS.md"), "# Candidate\n", "utf8");
+    await mkdir(path.join(tmp, ".wep/template-candidates/sample/1.0.0"), { recursive: true });
+    await writeFile(
+      path.join(tmp, ".wep/template-candidates/sample/1.0.0/AGENTS.md"),
+      "# Template candidate\n",
+      "utf8",
+    );
+
+    expect(await pathExists(path.join(tmp, ".wep/doctor"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/upgrades"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/judge"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/comprehension"))).toBe(true);
+    expect(await pathExists(path.join(tmp, ".wep/template-candidates"))).toBe(true);
+
+    const result = await runRemove({ cwd: tmp, all: true, force: true, nonInteractive: true });
+
+    expect(await pathExists(path.join(tmp, ".wep"))).toBe(false);
+    expect(result.planned).toContain(".wep/");
+    expect(result.protected.some((entry) => entry.includes(".wep/"))).toBe(false);
+  });
 });
 
 describe("skill content contract", () => {

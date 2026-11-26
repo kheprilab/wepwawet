@@ -1,4 +1,5 @@
-import { type ModuleName, type Target, type WepConfig, moduleNames } from "./types.js";
+import { MERGE_DECISIONS_PATH } from "./merge-decisions.js";
+import { type ModuleName, type Target, type WepConfig, moduleNames, targets } from "./types.js";
 
 /**
  * The files that make up a task capsule, in the order they are meant to be read.
@@ -31,6 +32,8 @@ export type CapsuleContent = Record<CapsuleFile, string>;
 export const upgradesDir = ".wep/upgrades";
 
 export const upgradesIgnorePath = `${upgradesDir}/.gitignore`;
+
+export const templateCandidatesDir = ".wep/template-candidates";
 
 /** Direct and transitive module dependencies. */
 export const moduleRequires: Record<ModuleName, readonly ModuleName[]> = {
@@ -218,3 +221,29 @@ export const protectedFiles = [
   ".github/copilot-instructions.md",
   ".pi/README.md",
 ];
+
+export function topLevelWepEntry(relativePath: string): string | undefined {
+  const normalized = relativePath.replace(/\\/g, "/");
+  if (!normalized.startsWith(".wep/")) return undefined;
+  const first = normalized.slice(".wep/".length).split("/")[0];
+  return first && first !== "." && first !== ".." ? first : undefined;
+}
+
+/**
+ * Top-level entry names directly under `.wep/` owned by wep itself.
+ * Derived from module neutral files, target references, and shared path constants.
+ */
+export function wepOwnedTopLevelEntries(): Set<string> {
+  const entries = new Set<string>();
+  const knownPaths = [
+    ...neutralFilesForModules(undefined),
+    ...targets.map(targetReferenceFile),
+    MERGE_DECISIONS_PATH,
+    templateCandidatesDir,
+  ];
+  for (const filePath of knownPaths) {
+    const entry = topLevelWepEntry(filePath);
+    if (entry) entries.add(entry);
+  }
+  return entries;
+}
