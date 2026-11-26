@@ -498,6 +498,21 @@ describe("guard hook", () => {
     expect(result?.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
+  it("falls back to walking up from process cwd when payload cwd has no wep config", async () => {
+    await runInit({ cwd: tmp, target: "codex", nonInteractive: true });
+    await writeLock(lock);
+    const agentsDir = path.join(tmp, ".agents");
+    await mkdir(agentsDir, { recursive: true });
+
+    const withUnrelatedPayloadCwd = JSON.stringify({ tool_name: "Write", cwd: "/anywhere" });
+    const resultFromFallback = await runGuard(withUnrelatedPayloadCwd, agentsDir, { isAlive: () => true });
+    expect(resultFromFallback?.hookSpecificOutput.permissionDecision).toBe("deny");
+
+    const withoutPayloadCwd = JSON.stringify({ tool_name: "Write" });
+    const resultWithoutPayload = await runGuard(withoutPayloadCwd, agentsDir, { isAlive: () => true });
+    expect(resultWithoutPayload?.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
   it("allows the tool on unreadable input or a corrupt lock", async () => {
     expect(await runGuard("not json", tmp)).toBeUndefined();
     await mkdir(path.dirname(path.join(tmp, RUN_LOCK_PATH)), { recursive: true });

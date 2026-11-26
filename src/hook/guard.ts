@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { pathExists, writePlannedFile } from "../fs-utils.js";
+import { writePlannedFile } from "../fs-utils.js";
 import { type RunLockEnv, readActiveRun } from "../judge-run-lock.js";
 import { resolveCliEntry } from "./install.js";
+import { resolveProjectRoot } from "./project-root.js";
 
 /**
  * Ownership marker of the run guard. Distinct from the trace marker, so enabling or disabling one
@@ -39,8 +40,9 @@ export async function runGuard(stdin: string, cwd: string, env: RunLockEnv = {})
   try {
     const payload = JSON.parse(stdin) as { tool_name?: unknown; cwd?: unknown };
     if (typeof payload.tool_name !== "string" || !guardedTools.has(payload.tool_name)) return undefined;
-    const start = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : cwd;
-    const run = await readActiveRun(await projectRoot(start), env);
+    const payloadCwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : undefined;
+    const root = (await resolveProjectRoot(payloadCwd, cwd)) ?? payloadCwd ?? cwd;
+    const run = await readActiveRun(root, env);
     if (!run) return undefined;
     return {
       hookSpecificOutput: {
@@ -51,17 +53,6 @@ export async function runGuard(stdin: string, cwd: string, env: RunLockEnv = {})
     };
   } catch {
     return undefined;
-  }
-}
-
-/** The nearest directory at or above `start` with an wep install; `start` itself when there is none. */
-async function projectRoot(start: string): Promise<string> {
-  let directory = path.resolve(start);
-  for (;;) {
-    if (await pathExists(path.join(directory, ".wep/config.json"))) return directory;
-    const parent = path.dirname(directory);
-    if (parent === directory) return start;
-    directory = parent;
   }
 }
 

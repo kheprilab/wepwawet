@@ -1,4 +1,6 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentFilePaths, emitTemplateAgent, hasAgentFormat, modelPatterns } from "../src/agents.js";
@@ -335,6 +337,169 @@ describe("antigravity target (AC-1..AC-10)", () => {
 
       expect(judgeRes.guard).toBeUndefined();
       expect(await pathExists(path.join(tmp, ".agents/hooks.json"))).toBe(false);
+    });
+  });
+
+  describe("hook project root resolution (#59, #68)", () => {
+    it("records traces in the repo root when invoked from .agents/ with a minimal payload omitting cwd", async () => {
+      await runInit({ cwd: tmp, target: "antigravity", nonInteractive: true });
+      await runTraceEnable({ cwd: tmp, allowShared: true });
+      const agentsDir = path.join(tmp, ".agents");
+
+      const start = await runHook(
+        "SessionStart",
+        JSON.stringify({ session_id: "ag-min", hook_event_name: "SessionStart" }),
+        agentsDir,
+        { host: "antigravity" },
+      );
+      expect(start.recorded).toBe(true);
+
+      const pre = await runHook(
+        "PreToolUse",
+        JSON.stringify({
+          session_id: "ag-min",
+          hook_event_name: "PreToolUse",
+          toolCall: { id: "c-1", name: "edit_file", args: { Path: path.join(tmp, "GEMINI.md") } },
+        }),
+        agentsDir,
+        { host: "antigravity" },
+      );
+      expect(pre.recorded).toBe(true);
+      expect(pre.body).toEqual({ decision: "allow" });
+
+      const post = await runHook(
+        "PostToolUse",
+        JSON.stringify({
+          session_id: "ag-min",
+          hook_event_name: "PostToolUse",
+          toolCall: { id: "c-1", name: "edit_file", args: { Path: path.join(tmp, "GEMINI.md") } },
+        }),
+        agentsDir,
+        { host: "antigravity" },
+      );
+      expect(post.recorded).toBe(true);
+      expect(post.body).toEqual({});
+
+      const stop = await runHook("Stop", JSON.stringify({ session_id: "ag-min", hook_event_name: "Stop" }), agentsDir, {
+        host: "antigravity",
+      });
+      expect(stop.recorded).toBe(true);
+
+      const raw = await readFile(path.join(tmp, ".wep/local/traces/ag-min.jsonl"), "utf8");
+      const parsed = parseTrace("ag-min", raw);
+      expect(parsed.complete).toBe(true);
+      expect(parsed.observations.find((o) => o.callId === "c-1")?.area).toBe("harness");
+      expect(await pathExists(path.join(agentsDir, ".wep"))).toBe(false);
+    });
+
+    it("records traces in the repo root when invoked from .agents/ with payload cwd pointing to repo", async () => {
+      await runInit({ cwd: tmp, target: "antigravity", nonInteractive: true });
+      await runTraceEnable({ cwd: tmp, allowShared: true });
+      const agentsDir = path.join(tmp, ".agents");
+
+      const start = await runHook(
+        "SessionStart",
+        JSON.stringify({ conversationId: "ag-cwd", cwd: tmp, hookEventName: "SessionStart" }),
+        agentsDir,
+        { host: "antigravity" },
+      );
+      const pre = await runHook(
+        "PreToolUse",
+        JSON.stringify({
+          conversationId: "ag-cwd",
+          cwd: tmp,
+          hookEventName: "PreToolUse",
+          toolCall: { id: "c-2", name: "edit_file", args: { Path: path.join(tmp, "src/app.ts") } },
+        }),
+        agentsDir,
+        { host: "antigravity" },
+      );
+      expect(start.recorded).toBe(true);
+      expect(pre.recorded).toBe(true);
+      expect(pre.body).toEqual({ decision: "allow" });
+      expect(await pathExists(path.join(tmp, ".wep/local/traces/ag-cwd.jsonl"))).toBe(true);
+      expect(await pathExists(path.join(agentsDir, ".wep"))).toBe(false);
+    });
+
+    it("prefers payload cwd over process cwd, falls back to process cwd, and fails open when neither has wep", async () => {
+      await runInit({ cwd: tmp, target: "antigravity", nonInteractive: true });
+      await runTraceEnable({ cwd: tmp, allowShared: true });
+      const agentsDir = path.join(tmp, ".agents");
+
+      const repoB = await mkdtemp(path.join(os.tmpdir(), "wep-ag-repob-"));
+      const noWep = await mkdtemp(path.join(os.tmpdir(), "wep-ag-nowep-"));
+      try {
+        await runInit({ cwd: repoB, target: "antigravity", nonInteractive: true });
+        await runTraceEnable({ cwd: repoB, allowShared: true });
+
+        // Payload cwd wins over processCwd when payload cwd resolves to a wep project
+        const inB = await runHook(
+          "SessionStart",
+          JSON.stringify({ session_id: "prefer-b", cwd: path.join(repoB, ".agents"), hook_event_name: "SessionStart" }),
+          agentsDir,
+          { host: "antigravity" },
+        );
+        expect(inB.recorded).toBe(true);
+        expect(await pathExists(path.join(repoB, ".wep/local/traces/prefer-b.jsonl"))).toBe(true);
+        expect(await pathExists(path.join(tmp, ".wep/local/traces/prefer-b.jsonl"))).toBe(false);
+
+        // Falls back to processCwd ancestry when payload cwd has no .wep/config.json
+        const fallback = await runHook(
+          "SessionStart",
+          JSON.stringify({ session_id: "fallback-a", cwd: "/anywhere", hook_event_name: "SessionStart" }),
+          agentsDir,
+          { host: "antigravity" },
+        );
+        expect(fallback.recorded).toBe(true);
+        expect(await pathExists(path.join(tmp, ".wep/local/traces/fallback-a.jsonl"))).toBe(true);
+
+        // Fails open when neither payload cwd nor processCwd has .wep/config.json, while keeping Antigravity body
+        const failOpen = await runHook(
+          "PreToolUse",
+          JSON.stringify({
+            session_id: "none",
+            cwd: "/anywhere",
+            hook_event_name: "PreToolUse",
+            toolCall: { id: "c-3", name: "edit_file", args: { Path: "a.ts" } },
+          }),
+          noWep,
+          { host: "antigravity" },
+        );
+        expect(failOpen.recorded).toBe(false);
+        expect(failOpen.decision).toBeUndefined();
+        expect(failOpen.body).toEqual({ decision: "allow" });
+      } finally {
+        await rm(repoB, { recursive: true, force: true });
+        await rm(noWep, { recursive: true, force: true });
+      }
+    });
+
+    it("writes traces to the repo root when the CLI `wep hook` subprocess runs from .agents/", async () => {
+      await runInit({ cwd: tmp, target: "antigravity", nonInteractive: true });
+      await runTraceEnable({ cwd: tmp, allowShared: true });
+      const agentsDir = path.join(tmp, ".agents");
+
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        const child = execFile(
+          "node",
+          [
+            path.join(process.cwd(), "dist/index.js"),
+            "hook",
+            "SessionStart",
+            "--wep-trace",
+            "--wep-host",
+            "antigravity",
+          ],
+          { cwd: agentsDir },
+        );
+        child.on("error", reject);
+        child.on("close", resolve);
+        child.stdin?.end(JSON.stringify({ session_id: "cli-sub", hook_event_name: "SessionStart" }));
+      });
+
+      expect(exitCode).toBe(0);
+      expect(await pathExists(path.join(tmp, ".wep/local/traces/cli-sub.jsonl"))).toBe(true);
+      expect(await pathExists(path.join(agentsDir, ".wep"))).toBe(false);
     });
   });
 });
