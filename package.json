@@ -1,6 +1,6 @@
 {
   "name": "wepwawet",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Local CLI that installs Wepwawet agentic workflow harnesses into repositories.",
   "type": "module",
   "bin": {
